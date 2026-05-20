@@ -4139,8 +4139,7 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   const doneCount=done.length;
   const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
-  const getToday2Str=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
-  const today2str=getToday2Str();
+  const today2str=todayStr();
 
   // ── TRANSACTIONS ───────────────────────────────────────────────────────────
   const txCards=useMemo(()=>(transactions||[]).map(tx=>{
