@@ -4784,7 +4784,7 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
           .filter(it => it.date === todayStr && !fromAnnotated.has(it.id))
           .map(it => ({item: it, prep: '', urgency: it.source === 'deadline' ? 'high' : 'medium'}));
         const rows = [...annotated, ...fallback];
-        if(!rows.length) return React.createElement('div',{style:{fontSize:12,color:'#6b6760',padding:'4px 0'}},'Nothing scheduled today.');
+        if(!rows.length) return null;
         return rows.map((row, idx) => {
           const it = row.item;
           if(!it) return null;
