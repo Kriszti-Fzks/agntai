@@ -1393,7 +1393,8 @@ async function autoAdvanceLeadStage(leadId, channel, direction, status, opts={})
     const leads = await dbLoadLeads();
     const lead = (leads||[]).find(l => l.id === leadId);
     if(!lead) return false;
-    const today = new Date().toISOString().slice(0,10);
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
     // Real phone conversation = either direction, as long as the call connected
     // (or a call entry has a summary which means the agent had a conversation worth noting).
@@ -1937,10 +1938,10 @@ async function runDailyTriage(leads, transactions, opts={}) {
 // ──────────────────────────────────────────────────────────────────────────────
 async function runMorningScan(leads, transactions, opts={}) {
   const today = new Date();
-  const todayStr = today.toISOString().slice(0,10);
+  const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
   const horizonDays = opts.horizonDays || 2;
   const horizon = new Date(today); horizon.setDate(horizon.getDate() + horizonDays);
-  const horizonStr = horizon.toISOString().slice(0,10);
+  const horizonStr = horizon.getFullYear() + '-' + String(horizon.getMonth() + 1).padStart(2, '0') + '-' + String(horizon.getDate()).padStart(2, '0');
 
   const allItems = buildCalendarItems(leads, transactions)
     .filter(it => it.date >= todayStr && it.date <= horizonStr);
@@ -2914,7 +2915,8 @@ function buildLeadContext(lead, transaction, commHistory) {
   // Transaction snapshot (if one exists for this lead)
   let txContext = 'none';
   if (transaction) {
-    const today = new Date().toISOString().split('T')[0];
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     const deadlines = [
       ['Deposit', transaction.deposit_due_date],
       ['Inspection Removal', transaction.inspection_removal_date],
@@ -3623,7 +3625,9 @@ function AddModal({onClose,onAdd}){
 
 function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   const PAGE_SIZE = 10;
-  const TODAY_KEY = 'agentos_today_' + new Date().toISOString().slice(0,10);
+  const d = new Date();
+  const todayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const TODAY_KEY = 'agentos_today_' + todayStr;
 
   // ── STATE ──────────────────────────────────────────────────────────────────
   // Completed cards for today. Stored in localStorage so they stay disappeared
@@ -3697,8 +3701,10 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
       try {
         const { data:{ user } } = await db.auth.getUser();
         const uid = (user && user.id) || 'guest';
-        const today = new Date().toISOString().slice(0,10);
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+        const d = new Date();
+        const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        const yd = new Date(Date.now() - 86400000);
+        const yesterday = yd.getFullYear() + '-' + String(yd.getMonth() + 1).padStart(2, '0') + '-' + String(yd.getDate()).padStart(2, '0');
         const key = `agntai_triage_${today}_${uid}`;
         const yKey = `agntai_triage_${yesterday}_${uid}`;
         if(cancelled) return;
@@ -3741,7 +3747,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
         // don't accidentally wipe yesterday's cache before reading it.
         setTriageReady(true);
       } catch(e) {
-        const today = new Date().toISOString().slice(0,10);
+        const d = new Date();
+        const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         triageKeyRef.current = `agntai_triage_${today}_anon`;
         triageUidRef.current = 'anon';
         setTriageReady(true);
@@ -3759,7 +3766,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
       try {
         const { data:{ user } } = await db.auth.getUser();
         const uid = (user && user.id) || 'guest';
-        const today = new Date().toISOString().slice(0,10);
+        const d = new Date();
+        const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         const key = `agntai_morning_${today}_${uid}`;
         if(cancelled) return;
         morningScanKeyRef.current = key;
@@ -3782,7 +3790,9 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
           }
         } catch(e) {}
       } catch(e) {
-        morningScanKeyRef.current = `agntai_morning_${new Date().toISOString().slice(0,10)}_anon`;
+        const d = new Date();
+        const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        morningScanKeyRef.current = `agntai_morning_${today}_anon`;
       }
     })();
     return () => { cancelled = true; };
@@ -3979,7 +3989,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
     const finalTasks = [];
     const leadById = {};
     leads.forEach(l => { leadById[l.id] = l; });
-    const todayStr=new Date().toISOString().split('T')[0];
+    const d=new Date();
+    const todayStr=d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
     // First pass: apply triage decisions for real leads
     const handledLeadIds = new Set();
@@ -4128,7 +4139,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   const doneCount=done.length;
   const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
-  const today2str=new Date().toISOString().split('T')[0];
+  const getToday2Str=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+  const today2str=getToday2Str();
 
   // ── TRANSACTIONS ───────────────────────────────────────────────────────────
   const txCards=useMemo(()=>(transactions||[]).map(tx=>{
@@ -4766,7 +4778,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
       morningScan.summary && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
       // Render today's items. Prefer the AI-annotated `today` list; fall back to raw items for today.
       (() => {
-        const todayStr = new Date().toISOString().slice(0,10);
+        const d = new Date();
+        const todayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         const annotated = (morningScan.today||[]).filter(t => t.item && t.item.date === todayStr);
         const fromAnnotated = new Set(annotated.map(t => t.item.id));
         const fallback = (morningScan.items||[])
@@ -6977,7 +6990,8 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
     }
     // Update lead's last_contact field — otherwise the "Last Contact" line on the lead
     // page stays as "—" even after a real send. (Same behavior as Today page's touchContact.)
-    const today = new Date().toISOString().slice(0,10);
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     if(lead.lastContact !== today){
       onUpd({...lead, lastContact: today});
     }
@@ -6994,7 +7008,8 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
 
   // Find linked transaction for this lead
   const leadTx = (transactions||[]).find(t => t.lead_id === lead.id);
-  const today = new Date().toISOString().split('T')[0];
+  const d = new Date();
+  const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const txDeadlines = leadTx ? [
     ['Deposit Due', leadTx.deposit_due_date],
     ['Inspection Removal', leadTx.inspection_removal_date],
@@ -9313,7 +9328,8 @@ function AIAssistantView({leads, transactions, onGoToLead}) {
   // then fires events so any open lead view refreshes.
   const logFromAssistant = async (channel, body, subject) => {
     if(!activeLead) return;
-    const today = new Date().toISOString().slice(0,10);
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     if(channel==='sms'){
       await dbLogComm(activeLead.id, 'sms', 'outbound', 'sent', {body: body || null, source:'assistant'});
     } else if(channel==='email'){
@@ -9465,8 +9481,9 @@ function AIAssistantView({leads, transactions, onGoToLead}) {
   // if comms changed during the message).
   const buildSystemContext = React.useCallback((commsMap) => {
     const agent = window._AGENT;
-    const today = new Date().toISOString().split('T')[0];
-    const todayDate = new Date();
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const todayDate = d;
     const fmtCommDate = (iso) => {
       if(!iso) return 'unknown';
       const d = new Date(iso);
@@ -10000,7 +10017,7 @@ This format is required so the app can extract just the message for sending. If 
 
 // ── DEMO LEADS ────────────────────────────────────────────────────────────────
 async function saveDemoTransaction(agentId){
-  const addDays=(n)=>{const r=new Date();r.setDate(r.getDate()+n);return r.toISOString().slice(0,10);};
+  const addDays=(n)=>{const r=new Date();r.setDate(r.getDate()+n);return r.getFullYear() + '-' + String(r.getMonth() + 1).padStart(2, '0') + '-' + String(r.getDate()).padStart(2, '0');};
   const pfx=agentId.slice(0,8);
   // Purchase transaction for Sarah & Mike Patel
   await dbSaveTransaction({
@@ -10047,8 +10064,8 @@ async function saveDemoTransaction(agentId){
 }
 
 function makeDemoLeads(agentId){
-  const daysAgo=n=>{const d=new Date();d.setDate(d.getDate()-n);return d.toISOString().slice(0,10);};
-  const daysFrom=n=>{const d=new Date();d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);};
+  const daysAgo=n=>{const d=new Date();d.setDate(d.getDate()-n);return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');};
+  const daysFrom=n=>{const d=new Date();d.setDate(d.getDate()+n);return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');};
   const pfx=agentId.slice(0,8);
   return [
     {
