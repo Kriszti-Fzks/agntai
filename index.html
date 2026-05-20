@@ -10529,26 +10529,6 @@ function App(){
     return ()=>{ subscription.unsubscribe(); };
   },[]);
 
-  // Auto sign-out after 30 minutes of inactivity
-  React.useEffect(() => {
-    if (!user) return;
-    const TIMEOUT_MS = 30 * 60 * 1000;
-    let timer = setTimeout(() => handleSignOut(), TIMEOUT_MS);
-
-    const reset = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => handleSignOut(), TIMEOUT_MS);
-    };
-
-    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
-    events.forEach(e => window.addEventListener(e, reset));
-
-    return () => {
-      clearTimeout(timer);
-      events.forEach(e => window.removeEventListener(e, reset));
-    };
-  }, [user]);
-
   // Tracks whether we've already initialized for this user. Used so the user-load
   // effect doesn't reset persisted view+selId on every re-render.
   const initializedUserId = React.useRef(null);
@@ -10703,6 +10683,26 @@ function App(){
     setAuthReady(false);
     setTimeout(()=>setAuthReady(true),100);
   };
+
+  // Auto sign-out after 30 minutes of inactivity
+  React.useEffect(() => {
+    if (!user) return;
+    const TIMEOUT_MS = 30 * 60 * 1000;
+    let timer = setTimeout(() => handleSignOut(), TIMEOUT_MS);
+
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => handleSignOut(), TIMEOUT_MS);
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+    events.forEach(e => window.addEventListener(e, reset));
+
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, reset));
+    };
+  }, [user, handleSignOut]);
 
   if(!authReady)return React.createElement('div',{style:{minHeight:'100vh',background:'#f8f7f5',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}},
     React.createElement('div',{style:{fontSize:32}},'⏳'),
