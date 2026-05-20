@@ -913,7 +913,7 @@ async function dbLoadLeads() {
   const { data:{ user } } = await db.auth.getUser();
   if(!user) return [];
   const { data, error } = await db.from('leads').select('*').eq('agent_id', user.id).order('created_at', { ascending: false });
-  if (error) { console.error('Load error:', error); return null; }
+  if (error) { console.error('Load error:', error); return []; }
   return data.map(r => ({
     id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
     source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
@@ -931,6 +931,29 @@ async function dbLoadLeads() {
     sphereCategory: r.sphere_category||null,
     isDemo: r.is_demo||false,
   }));
+}
+
+async function dbLoadLead(leadId) {
+  const { data, error } = await db.from('leads').select('*').eq('id', leadId).single();
+  if(error || !data) return null;
+  const r = data;
+  return {
+    id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
+    source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
+    lastContact: r.last_contact||'', notes: r.notes||'', nextStep: r.next_step||'',
+    tags: r.tags||[], propertiesShared: r.properties_shared||[],
+    interestedProperties: r.interested_properties||[],
+    touredProperties: r.toured_properties||[],
+    appointments: r.appointments||[], documents: r.documents||[],
+    scheduledTasks: r.scheduled_tasks||[],
+    completedSteps: r.completed_steps||[],
+    activityLog: r.activity_log||[],
+    activeProtocolId: r.active_protocol_id||null,
+    protocolStep: r.protocol_step||0,
+    protocolStartedAt: r.protocol_started_at||null,
+    sphereCategory: r.sphere_category||null,
+    isDemo: r.is_demo||false,
+  };
 }
 
 async function dbSaveLead(lead) {
@@ -997,8 +1020,7 @@ function _newTaskId(){
 }
 
 async function dbAddScheduledTask(leadId, task) {
-  const leads = await dbLoadLeads();
-  const lead = (leads||[]).find(l => l.id === leadId);
+  const lead = await dbLoadLead(leadId);
   if(!lead) return null;
   const newTask = {
     id: task.id || _newTaskId(),
@@ -1020,8 +1042,7 @@ async function dbAddScheduledTask(leadId, task) {
 }
 
 async function dbUpdateScheduledTask(leadId, taskId, patch) {
-  const leads = await dbLoadLeads();
-  const lead = (leads||[]).find(l => l.id === leadId);
+  const lead = await dbLoadLead(leadId);
   if(!lead) return false;
   const tasks = (lead.scheduledTasks||[]).map(t => t.id === taskId ? {...t, ...patch} : t);
   await dbSaveLead({...lead, scheduledTasks: tasks});
@@ -1030,8 +1051,7 @@ async function dbUpdateScheduledTask(leadId, taskId, patch) {
 }
 
 async function dbRemoveScheduledTask(leadId, taskId) {
-  const leads = await dbLoadLeads();
-  const lead = (leads||[]).find(l => l.id === leadId);
+  const lead = await dbLoadLead(leadId);
   if(!lead) return false;
   const tasks = (lead.scheduledTasks||[]).filter(t => t.id !== taskId);
   await dbSaveLead({...lead, scheduledTasks: tasks});
@@ -1390,8 +1410,7 @@ function detectAndNotify(leadId, leadName, text, sourceLabel) {
 // Returns true if the stage was advanced (so caller can refresh UI), false otherwise.
 async function autoAdvanceLeadStage(leadId, channel, direction, status, opts={}) {
   try {
-    const leads = await dbLoadLeads();
-    const lead = (leads||[]).find(l => l.id === leadId);
+    const lead = await dbLoadLead(leadId);
     if(!lead) return false;
     const d = new Date();
     const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -1463,6 +1482,27 @@ async function dbLoadCommunications(leadId) {
     subject: r.subject, body: r.body, summary: r.summary,
     source: r.source, sentAt: r.sent_at, createdAt: r.created_at,
   }));
+}
+
+async function dbLoadCommunicationsBatch(leadIds) {
+  if(!leadIds || !leadIds.length) return {};
+  const { data, error } = await db.from('communications')
+    .select('*')
+    .in('lead_id', leadIds)
+    .order('created_at', { ascending: false });
+  if(error){ console.error('Comm batch load error:', error); return {}; }
+  const map = {};
+  leadIds.forEach(id => { map[id] = []; });
+  (data||[]).forEach(r => {
+    if(!map[r.lead_id]) map[r.lead_id] = [];
+    map[r.lead_id].push({
+      id: r.id, leadId: r.lead_id, agentId: r.agent_id,
+      channel: r.channel, direction: r.direction, status: r.status,
+      subject: r.subject, body: r.body, summary: r.summary,
+      source: r.source, sentAt: r.sent_at, createdAt: r.created_at,
+    });
+  });
+  return map;
 }
 
 // Convenience: save a comm record in one call — used everywhere
@@ -1837,10 +1877,8 @@ async function runDailyTriage(leads, transactions, opts={}) {
   const active = (leads||[]);
   if(!active.length) return { byLeadId: {}, count: 0 };
 
-  // Load communications for all active leads in parallel
-  const commsArrays = await Promise.all(active.map(l => dbLoadCommunications(l.id)));
-  const commsByLead = {};
-  active.forEach((l, i) => { commsByLead[l.id] = commsArrays[i]; });
+  // Load communications for all active leads in a single batch query
+  const commsByLead = await dbLoadCommunicationsBatch(active.map(l => l.id));
 
   // ── SKIP-UNCHANGED PASS ─────────────────────────────────────────────────────
   // For each lead, hash its decision-relevant state. Reuse the previous decision
@@ -3947,14 +3985,8 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   // ── BATCHED COMMS LOADING (10 at a time) ───────────────────────────────────
   const loadCommsInBatches = React.useCallback(async(leadsToLoad)=>{
     if(!leadsToLoad||!leadsToLoad.length)return;
-    const BATCH=10;
-    for(let i=0;i<leadsToLoad.length;i+=BATCH){
-      const batch=leadsToLoad.slice(i,i+BATCH);
-      const results=await Promise.all(batch.map(l=>dbLoadCommunications(l.id)));
-      const chunk={};
-      batch.forEach((l,idx)=>{chunk[l.id]=results[idx]||[];});
-      setCommsMap(prev=>({...prev,...chunk}));
-    }
+    const commsByLead = await dbLoadCommunicationsBatch(leadsToLoad.map(l => l.id));
+    setCommsMap(prev=>({...prev,...commsByLead}));
     setCommsLoaded(true);
   },[]);
 
@@ -9205,9 +9237,7 @@ function AIAssistantView({leads, transactions, onGoToLead}) {
   const loadAllComms = React.useCallback(async () => {
     if(!leads || !leads.length) return;
     try {
-      const arrays = await Promise.all(leads.map(l => dbLoadCommunications(l.id).catch(()=>[])));
-      const map = {};
-      leads.forEach((l, i) => { map[l.id] = arrays[i] || []; });
+      const map = await dbLoadCommunicationsBatch(leads.map(l => l.id));
       setCommsByLead(map);
     } catch(e) { console.error('Failed to load comms for assistant:', e); }
   }, [leads]);
@@ -9710,9 +9740,7 @@ This format is required so the app can extract just the message for sending. If 
     // freshly with that data so this request reflects the most current state.
     let freshComms = commsByLead;
     try {
-      const arrays = await Promise.all(leads.map(l => dbLoadCommunications(l.id).catch(()=>[])));
-      freshComms = {};
-      leads.forEach((l, i) => { freshComms[l.id] = arrays[i] || []; });
+      freshComms = await dbLoadCommunicationsBatch(leads.map(l => l.id));
       setCommsByLead(freshComms);
     } catch(e) {}
     const freshSystemContext = buildSystemContext(freshComms);
