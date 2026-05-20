@@ -4138,8 +4138,7 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   const dealPath=useMemo(()=>getDealPath(leads,commsMap,transactions),[leads,commsMap,transactions]);
   const doneCount=done.length;
   const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
-  const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
-  const today2str=todayStr();
+  const today2str=todayStr;
 
   // ── TRANSACTIONS ───────────────────────────────────────────────────────────
   const txCards=useMemo(()=>(transactions||[]).map(tx=>{
