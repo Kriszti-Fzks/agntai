@@ -2831,6 +2831,7 @@ function autoAssignProtocol(lead, commHistory, transactions) {
   const stageMap = {
     'New': 'new_lead',
     'Lead': 'new_lead',
+    'Contacted': null,
     'Spoke With Lead': 'new_lead',
     'Spoke with Lead': 'new_lead',
     'Showing Homes': 'sent_listings',
@@ -2855,6 +2856,7 @@ function autoAssignProtocol(lead, commHistory, transactions) {
     const sellerMap = {
       'New': 'new_lead',
       'Lead': 'new_lead',
+      'Contacted': null,
       'Spoke With Lead': 'new_lead',
       'Spoke with Lead': 'new_lead',
       'Listing Appointment': 'listing_appointment',
@@ -2872,6 +2874,7 @@ function autoAssignProtocol(lead, commHistory, transactions) {
     const tenantMap = {
       'New': 'new_tenant_lead',
       'Lead': 'new_tenant_lead',
+      'Contacted': null,
       'Spoke With Lead': 'new_tenant_lead',
       'Spoke with Lead': 'new_tenant_lead',
       'Showing Rentals': 'tenant_showing',
@@ -2885,6 +2888,7 @@ function autoAssignProtocol(lead, commHistory, transactions) {
     const landlordMap = {
       'New': 'new_landlord_lead',
       'Lead': 'new_landlord_lead',
+      'Contacted': null,
       'Spoke With Lead': 'new_landlord_lead',
       'Spoke with Lead': 'new_landlord_lead',
       'Rental Evaluation': 'new_landlord_lead',
@@ -2989,7 +2993,10 @@ function buildLeadContext(lead, transaction, commHistory) {
 
   // Rich history — all structured data Claude needs to stop guessing
   const appointmentHistory = (lead.appointments||[]).slice(0,8)
-    .map(a => a.date + ' ' + a.type + (a.notes ? ': ' + a.notes : '')).join(' | ') || 'none';
+    .map(a => {
+      const dateStr = a.date ? new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) : '?';
+      return dateStr + ' ' + a.type + (a.notes ? ': ' + a.notes : '');
+    }).join(' | ') || 'none';
 
   const touredHistory = (lead.touredProperties||[]).slice(0,8)
     .map(p => p.address + (p.notes ? ' (feedback: ' + p.notes + ')' : '') + (p.date ? ' on ' + p.date : '')).join(' | ') || 'none';
