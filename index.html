@@ -3668,7 +3668,7 @@ function AddModal({onClose,onAdd}){
   );
 }
 
-function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
+function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI}){
   const PAGE_SIZE = 10;
   const d = new Date();
   const todayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -3989,34 +3989,18 @@ function TodayView({leads,transactions,onSel,onTx,onUpd,onAskAI}){
   },[]);
   React.useEffect(()=>{try{localStorage.setItem(TODAY_KEY,JSON.stringify(done));}catch(e){};},[done]);
 
-  // ── BATCHED COMMS LOADING (10 at a time) ───────────────────────────────────
-  const loadCommsInBatches = React.useCallback(async(leadsToLoad)=>{
-    if(!leadsToLoad||!leadsToLoad.length)return;
-    const commsByLead = await dbLoadCommunicationsBatch(leadsToLoad.map(l => l.id));
-    setCommsMap(prev=>({...prev,...commsByLead}));
-    setCommsLoaded(true);
-  },[]);
-
+  // ── COMMUNICATIONS LOADED AT APP STARTUP ──────────────────────────────────
+  // Communications are now pre-loaded when app opens and passed as prop
+  // This ensures both Today view and AI assistant see complete lead history
   React.useEffect(()=>{
-    if(!leads||!leads.length)return;
-    const activeLeads=leads.filter(l=>!['Closed','Nurture'].includes(l.stage));
-    setCommsLoaded(false);
-    loadCommsInBatches(activeLeads);
-  },[leads]);
-
-  const refreshCommsForLead=React.useCallback(async(leadId)=>{
-    const data=await dbLoadCommunications(leadId);
-    setCommsMap(prev=>({...prev,[leadId]:data}));
-  },[]);
-
-  React.useEffect(()=>{
-    const onFocus=()=>{
-      if(!leads||!leads.length)return;
-      loadCommsInBatches(leads.filter(l=>!['Closed','Nurture'].includes(l.stage)));
-    };
-    window.addEventListener('focus',onFocus);
-    return()=>window.removeEventListener('focus',onFocus);
-  },[leads,loadCommsInBatches]);
+    // Initialize commsMap from passed-in communications prop
+    if(communications && Object.keys(communications).length > 0){
+      setCommsMap(communications);
+      setCommsLoaded(true);
+    } else {
+      setCommsLoaded(false);
+    }
+  },[communications]);
 
   // ── TASK GENERATION ────────────────────────────────────────────────────────
   const allTasks=useMemo(()=>{
@@ -9211,7 +9195,7 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
 
 
 // ── AI ASSISTANT ──────────────────────────────────────────────────────────────
-function AIAssistantView({leads, transactions, onGoToLead}) {
+function AIAssistantView({leads, transactions, communications, onGoToLead}) {
   const {useState, useEffect, useRef, useMemo} = React;
   // Persistence — restore the last conversation state so leaving and returning
   // doesn't wipe a draft message or in-progress AI conversation.
@@ -9233,24 +9217,10 @@ function AIAssistantView({leads, transactions, onGoToLead}) {
   const isMobileDevice = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 
   // ── COMM HISTORY FOR FULL DATA ACCESS ────────────────────────────────────
-  // The AI assistant needs to see actual communication history (texts, emails,
-  // calls) for each lead — not just stage and lastContact date. This lets it
-  // answer questions like "which New leads have I already texted?" or "show me
-  // leads where I'm waiting on a reply." Without this, the AI is guessing.
-  //
-  // We load on mount + refresh before each send so the AI always sees current data.
-  const [commsByLead, setCommsByLead] = useState({});
-
-  const loadAllComms = React.useCallback(async () => {
-    if(!leads || !leads.length) return;
-    try {
-      const map = await dbLoadCommunicationsBatch(leads.map(l => l.id));
-      setCommsByLead(map);
-    } catch(e) { console.error('Failed to load comms for assistant:', e); }
-  }, [leads]);
-
-  // Load on mount and whenever the leads list changes
-  useEffect(() => { loadAllComms(); }, [loadAllComms]);
+  // Communications are pre-loaded at app startup and passed as prop so the AI
+  // always sees complete lead history (not just stage and lastContact date).
+  // This lets it answer "which leads have I texted?" or "show me waiting replies."
+  const commsByLead = communications || {};
 
   // Mount: scroll the messages container to TOP so the user starts reading from
   // the beginning of the conversation, not at the input box at the bottom.
@@ -9533,12 +9503,14 @@ function AIAssistantView({leads, transactions, onGoToLead}) {
     };
 
     const leadSummaries = leads.map(l => {
-      const ds = daysSince(l.lastContact);
+      // Infer lastContact from most recent communication if lead.lastContact is not set
+      const comms = (commsMap[l.id]||[]).slice(0, 10);
+      const lastContactDate = l.lastContact || (comms.length > 0 ? comms[0].createdAt || comms[0].sentAt : null);
+      const ds = daysSince(lastContactDate);
       const toured = (l.touredProperties||[]).length;
       const appointments = (l.appointments||[]).map(a=>a.date+' '+a.type+(a.notes?' ('+a.notes+')':'')).join(', ');
       const touredList = (l.touredProperties||[]).map(p=>p.address+(p.notes?' — '+p.notes:'')).join(', ');
       // Build comm history snippet — last 10 entries, direction arrows, status, dates
-      const comms = (commsMap[l.id]||[]).slice(0, 10);
       const commLines = comms.map(c => {
         const dir = c.direction === 'outbound' ? '→' : '←';
         const stat = (c.status||'').toUpperCase();
@@ -9743,14 +9715,8 @@ This format is required so the app can extract just the message for sending. If 
     setMessages(newMessages);
     setLoading(true);
 
-    // Refresh comm data so the AI sees the latest. Then build the system context
-    // freshly with that data so this request reflects the most current state.
-    let freshComms = commsByLead;
-    try {
-      freshComms = await dbLoadCommunicationsBatch(leads.map(l => l.id));
-      setCommsByLead(freshComms);
-    } catch(e) {}
-    const freshSystemContext = buildSystemContext(freshComms);
+    // Build system context with current lead and communication data
+    const freshSystemContext = buildSystemContext(commsByLead);
 
     // Build conversation history for Claude
     const history = newMessages.map(m=>({role:m.role, content:m.content}));
@@ -10521,6 +10487,7 @@ function App(){
   const [showProfile,setShowProfile]=useState(false);
   const [sbCollapsed,setSbCollapsed]=useState(false);
   const [transactions,setTransactions]=useState([]);
+  const [communications,setCommunications]=useState({});
   const [txStartLead,setTxStartLead]=useState(null);
   // Onboarding fork modal — pick "I'm a new agent" or "I have leads"
   const [showFork,setShowFork]=useState(false);
@@ -10604,6 +10571,8 @@ function App(){
       Promise.all(demos.map(d=>dbSaveLead(d)))
         .then(()=>saveDemoTransaction(user.id))
         .catch(()=>{});
+      // Demo leads have no communications
+      setCommunications({});
       db.auth.updateUser({data:{is_new_signup:false}}).catch(()=>{});
       setOnboardStep('welcome');
       return;
@@ -10624,6 +10593,10 @@ function App(){
         setOnboardStep('welcome');
       } else {
         setLeads(loaded);
+        // Load all communications for these leads
+        dbLoadCommunicationsBatch(loaded.map(l=>l.id)).then(commMap=>{
+          setCommunications(commMap||{});
+        }).catch(()=>{});
         setDbReady(true);
       }
     }).catch(()=>setDbReady(true));
@@ -10805,7 +10778,7 @@ function App(){
                 React.createElement('button',{className:'demo-banner-cta',onClick:removeDemoLeads},'Remove demo leads')
               )
         ),
-        view==='today'?React.createElement(TodayView,{leads,transactions,onSel:id=>{setSelId(id);setView('crm');},onTx:()=>setView('transactions'),onUpd:upd,onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
+        view==='today'?React.createElement(TodayView,{leads,transactions,communications,onSel:id=>{setSelId(id);setView('crm');},onTx:()=>setView('transactions'),onUpd:upd,onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :view==='calendar'?React.createElement(CalView,{
           leads,
           transactions,
@@ -10823,7 +10796,7 @@ function App(){
           }
         })
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
-        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
+        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
       ),
