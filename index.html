@@ -10593,23 +10593,31 @@ function App(){
         setOnboardStep('welcome');
       } else {
         setLeads(loaded);
-        // Load all communications for these leads
+        // Load all communications for these leads — wait for them before marking ready
         dbLoadCommunicationsBatch(loaded.map(l=>l.id)).then(commMap=>{
           setCommunications(commMap||{});
-        }).catch(()=>{});
-        setDbReady(true);
+          setDbReady(true);
+        }).catch(()=>{
+          setDbReady(true); // Mark ready even if comms fail to load
+        });
       }
     }).catch(()=>setDbReady(true));
   },[user]);
 
   // Refresh leads when something dispatches `leads-changed` (e.g. triage just
   // created pending scheduled tasks on leads, and the calendar/Today need to
-  // pick them up without a full page reload).
+  // pick them up without a full page reload). Also refresh communications.
   React.useEffect(()=>{
     const handler=()=>{
       if(!user) return;
       dbLoadLeads().then(data=>{
-        if(data && data.length) setLeads(data);
+        if(data && data.length) {
+          setLeads(data);
+          // Also refresh communications for the updated leads
+          dbLoadCommunicationsBatch(data.map(l=>l.id)).then(commMap=>{
+            setCommunications(commMap||{});
+          }).catch(()=>{});
+        }
       }).catch(()=>{});
     };
     window.addEventListener('leads-changed', handler);
