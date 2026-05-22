@@ -9220,7 +9220,19 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
   // Communications are pre-loaded at app startup and passed as prop so the AI
   // always sees complete lead history (not just stage and lastContact date).
   // This lets it answer "which leads have I texted?" or "show me waiting replies."
-  const commsByLead = communications || {};
+  const [commsByLead, setCommsByLead] = useState(communications || {});
+
+  // If communications aren't in prop, load them directly (fallback)
+  useEffect(() => {
+    if(communications && Object.keys(communications).length > 0) {
+      setCommsByLead(communications);
+    } else if(leads && leads.length > 0) {
+      // Fallback: load if prop is empty
+      dbLoadCommunicationsBatch(leads.map(l => l.id)).then(commMap => {
+        setCommsByLead(commMap || {});
+      }).catch(() => {});
+    }
+  }, [communications, leads]);
 
   // Mount: scroll the messages container to TOP so the user starts reading from
   // the beginning of the conversation, not at the input box at the bottom.
@@ -9518,11 +9530,12 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
         return `      ${dir} [${(c.channel||'?').toUpperCase()} · ${stat}] ${fmtCommDate(c.createdAt || c.sentAt)} — ${text}`;
       });
       const commBlock = comms.length
-        ? `\n    Communication history (most recent ${comms.length}):\n${commLines.join('\n')}`
-        : '\n    Communication history: (none logged yet)';
+        ? `Communication history (most recent ${comms.length}):\n${commLines.join('\n')}`
+        : 'Communication history: (none logged yet)';
       return [
         'Name: '+l.name+' [id:'+l.id+']',
         'Type: '+l.type+' | Stage: '+l.stage,
+        commBlock,
       'Last contact: '+(ds===null ? 'never (just imported / no contact history)' : ds+' days ago'),
         'Phone: '+l.phone+' | Email: '+l.email,
         'Notes: '+(l.notes||'none'),
@@ -9531,7 +9544,7 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
         toured>0?'Toured ('+toured+'): '+touredList:null,
         appointments?'Appointments: '+appointments:null,
         (l.completedSteps||[]).length>0?'Completed steps: '+(l.completedSteps||[]).join(', '):null,
-      ].filter(Boolean).join('\n    ') + commBlock;
+      ].filter(Boolean).join('\n    ');
     }).join('\n\n  ');
 
     const txSummaries = transactions.map(tx => {
@@ -9583,23 +9596,13 @@ RULES:
 - Use **bold** sparingly for emphasis only — no headers, no excessive formatting
 - Never use HTML tags
 
-LEAD STAGE TAXONOMY (read carefully — your coaching depends on this):
-- "New" = lead just came in or was imported. May or may not have been contacted yet.
-  → If "Last contact" is "never", they were just imported / are fresh and have NEVER been reached. NEVER call them dormant or cold. The right coaching is "reach out for the first time — keep it warm and brief".
-  → If "Last contact" shows a date, the agent contacted them but the system didn't auto-advance their stage yet.
-- "Contacted" = the agent has tried text/email/call but the lead has NOT yet replied or had a real back-and-forth conversation. They're not cold — just unconfirmed. Coaching should focus on follow-up via different channels, not assuming they're ghosting.
-- "Spoke With Lead" = agent has had an actual two-way conversation. Now move to next steps (qualify, set appointment, send listings, etc.)
-- All other stages mean a real engagement is underway.
-
-CRITICAL: NEVER write coaching like "stone cold after 999 days" or "dormant" or "they've been silent" for a lead whose Last contact is "never". They have never been contacted — they aren't ghosting, the agent just hasn't reached out yet. The opening message should be a normal warm first contact, not a re-engagement.
-
-STAGE vs REALITY (IMPORTANT):
-Real estate is dynamic. A lead's recorded stage might not match their actual situation based on communications.
-- You have ALL communications for each lead. Use them as the source of truth
-- Analyze the full picture: emails, calls, replies, timeline, notes — not just the stage label
-- If the recorded stage doesn't match the communication pattern, recommend updating it
-- Example: If stage says "New" but you see 10 days of back-and-forth emails and calls, say: "This looks like 'Spoke With Lead' — recommend updating the stage so coaching is accurate"
-- Trust your judgment. Real estate situations vary. Use the communications to guide your recommendation, not rigid rules
+COMMUNICATIONS ARE YOUR SOURCE OF TRUTH:
+- Read the actual communications first — emails, calls, replies, timeline
+- Communications show what ACTUALLY happened, not what the system label says
+- Base your coaching on communications, not on stage
+- Stages and protocols are context, but communications are what's real
+- If communications show the lead is further along than their stage suggests, coach based on the communications
+- Example: If stage says "New" but you see 10 days of back-and-forth emails and a reply, treat them as already engaged
 
 DRAFT MESSAGE FORMAT (CRITICAL):
 When drafting any message the agent could send to a client (text, email, voicemail script), you MUST wrap the EXACT message between two lines containing only "---" (three dashes), with blank lines around them. The message between the dashes must be ready-to-send content only — no labels, no quotes around it, no preamble inside the block. Coaching, tips, reasoning, flags, and explanations always go AFTER the closing --- line.
