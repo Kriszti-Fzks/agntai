@@ -10777,6 +10777,16 @@ function App(){
         )
       ),
       React.createElement('main',{className:'main'+(sbCollapsed?' sb-collapsed':'')},
+        // AI Disclaimer banner — shown on all views
+        React.createElement('div',{style:{background:'linear-gradient(90deg, #fef3c7 0%, #fef9e7 100%)',border:'1px solid #fcd34d',borderLeft:'4px solid #f59e0b',borderRadius:10,padding:'14px 18px',margin:'16px 28px 0',boxShadow:'0 1px 3px rgba(245,158,11,0.06)',display:'flex',alignItems:'flex-start',gap:12}},
+          React.createElement('div',{style:{fontSize:18,lineHeight:1,flexShrink:0}},'⚠️'),
+          React.createElement('div',{},
+            React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#92400e',marginBottom:4}},'AI-Generated Suggestions'),
+            React.createElement('div',{style:{fontSize:12,color:'#78350f',lineHeight:1.5}},
+              'Claude provides suggestions for follow-ups, pricing, and outreach. Always verify information independently before relying on it for business decisions.'
+            )
+          )
+        ),
         // Demo banner — only on Today view, two states based on whether they have real leads yet
         hasDemoLeads && view==='today' && (
           !hasRealLeads
