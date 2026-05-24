@@ -10079,55 +10079,53 @@ function makeDemoLeads(agentId){
   const pfx=agentId.slice(0,8);
   return [
     {
-      id:'demo-1-'+pfx,name:'Alex Rivera (Demo)',type:'Buyer',stage:'Spoke With Lead',
-      phone:'(555) 100-0001',email:'alex.demo@example.com',source:'Open House',
-      notes:'3br in Ladera Ranch, budget $850k. Pre-approved. Wants to move before school year. Interested in homes near good schools.',
-      nextStep:'Send 3 Ladera Ranch listings that match criteria',lastContact:daysAgo(1),
-      tags:['Pre-Approved','Hot Lead'],activeProtocolId:null,protocolStep:0,
-      protocolStartedAt:null,propertiesShared:[],interestedProperties:[],
-      touredProperties:[],appointments:[],
-      documents:[],agent_id:agentId,isDemo:true,
-      created_at:new Date().toISOString(),updated_at:new Date().toISOString()
-    },
-    {
-      id:'demo-2-'+pfx,name:'Maria & Tom Chen (Demo)',type:'Seller',stage:'Listing Appointment',
-      phone:'(555) 100-0002',email:'chen.demo@example.com',source:'Referral',
-      notes:'Want to list their home in Mission Viejo. 4br, pool. Expecting $1.1M. Appointment set for next week — need CMA.',
-      nextStep:'Prepare CMA and listing presentation',lastContact:daysAgo(1),
-      tags:['Listing','Referral'],activeProtocolId:'listing_appointment',protocolStep:0,
-      protocolStartedAt:daysAgo(1),propertiesShared:[],interestedProperties:[],
-      touredProperties:[],appointments:[{id:'apt-demo-2',type:'Listing Appointment',date:daysFrom(5),notes:'Bring CMA and marketing plan'}],
-      documents:[],agent_id:agentId,isDemo:true,
-      created_at:new Date().toISOString(),updated_at:new Date().toISOString()
-    },
-    {
-      id:'demo-3-'+pfx,name:'Jordan Lee (Demo)',type:'Buyer',stage:'New',
-      phone:'(555) 100-0003',email:'jordan.demo@example.com',source:'Lead Gen',
-      notes:'Downloaded buyer guide from website. First time buyer. No pre-approval yet.',
-      nextStep:'Intro call — find their Big Why',lastContact:daysAgo(2),
-      tags:['First Time Buyer'],activeProtocolId:'new_lead',protocolStep:0,
+      id:'demo-1-'+pfx,name:'Marcus Johnson (Demo)',type:'Tenant',stage:'Lease Signed',
+      phone:'(555) 200-0001',email:'marcus.demo@example.com',source:'Past Client',
+      notes:'2BR apartment in Santa Ana. Lease ending July 31st. Hasn\'t decided if staying or moving yet. Good tenant, likely to renew if rates are right.',
+      nextStep:'Call to discuss renewal options and timeline',lastContact:daysAgo(60),
+      tags:['Lease Ending','Renewal','Past Client'],activeProtocolId:'lease_renewal',protocolStep:0,
       protocolStartedAt:daysAgo(0),propertiesShared:[],interestedProperties:[],
       touredProperties:[],appointments:[],documents:[],agent_id:agentId,isDemo:true,
       created_at:new Date().toISOString(),updated_at:new Date().toISOString()
     },
     {
-      id:'demo-4-'+pfx,name:'Sarah & Mike Patel (Demo)',type:'Buyer',stage:'Under Contract',
-      phone:'(555) 100-0004',email:'patel.demo@example.com',source:'Referral',
-      notes:'3BR in Irvine, $1.05M. FHA loan. Under contract — inspection done, appraisal ordered.',
-      nextStep:'Confirm loan removal date with lender',lastContact:daysAgo(1),
-      tags:['Under Contract','FHA','Referral'],activeProtocolId:'under_contract',protocolStep:2,
-      protocolStartedAt:daysAgo(10),propertiesShared:[],interestedProperties:[],
+      id:'demo-2-'+pfx,name:'Sophie Chen (Demo)',type:'Buyer',stage:'New',
+      phone:'(555) 200-0002',email:'sophie.demo@example.com',source:'Lead Generation',
+      notes:'Downloaded buyer guide. First time buyer interested in Irvine area. Budget $450-550k. No pre-approval yet.',
+      nextStep:'Intro call — understand timeline and get pre-approval started',lastContact:null,
+      tags:['First Time Buyer','New Lead','Online'],activeProtocolId:'new_lead',protocolStep:0,
+      protocolStartedAt:daysAgo(0),propertiesShared:[],interestedProperties:[],
       touredProperties:[],appointments:[],documents:[],agent_id:agentId,isDemo:true,
       created_at:new Date().toISOString(),updated_at:new Date().toISOString()
     },
     {
-      id:'demo-5-'+pfx,name:'Jessica Turner (Demo)',type:'Tenant',stage:'Lease Signed',
-      phone:'(555) 100-0005',email:'jessica.demo@example.com',source:'Referral',
-      notes:'2BR in Irvine near Spectrum. Lease ending soon — needs to decide on renewal or new place.',
-      nextStep:'Call to find out renewal plans',lastContact:daysAgo(45),
-      tags:['Lease Ending','Referral'],activeProtocolId:null,protocolStep:0,
-      protocolStartedAt:null,propertiesShared:[],interestedProperties:[],
-      touredProperties:[],appointments:[],documents:[],agent_id:agentId,isDemo:true,
+      id:'demo-3-'+pfx,name:'David & Lisa Rodriguez (Demo)',type:'Buyer',stage:'Showing Homes',
+      phone:'(555) 200-0003',email:'rodriguez.demo@example.com',source:'Referral',
+      notes:'Pre-approved $950k. Want 4br in Newport Beach. Already saw 3 homes, interested in 2 of them. No buyer rep agreement signed yet but actively engaging.',
+      nextStep:'Follow up on favorite homes and propose buyer representation',lastContact:daysAgo(2),
+      tags:['Pre-Approved','Active','No Rep Agreement'],activeProtocolId:'sent_listings',protocolStep:1,
+      protocolStartedAt:daysAgo(4),propertiesShared:[{id:'p1',address:'123 Ocean View, Newport Beach',dateShared:daysAgo(2)},{id:'p2',address:'456 Cliff Drive, Newport Beach',dateShared:daysAgo(2)}],interestedProperties:[],
+      touredProperties:[{id:'t1',address:'123 Ocean View, Newport Beach',date:daysAgo(1)},{id:'t2',address:'456 Cliff Drive, Newport Beach',date:daysAgo(1)},{id:'t3',address:'789 Sea Breeze, Corona del Mar',date:daysAgo(3)}],appointments:[],documents:[],agent_id:agentId,isDemo:true,
+      created_at:new Date().toISOString(),updated_at:new Date().toISOString()
+    },
+    {
+      id:'demo-4-'+pfx,name:'James & Patricia Lee (Demo)',type:'Buyer',stage:'Under Contract',
+      phone:'(555) 200-0004',email:'lee.demo@example.com',source:'Previous Client',
+      notes:'Under contract on 3br in Mission Viejo, $825k. Home inspection passed. Appraisal ordered. Final walkthrough scheduled for Friday. Loan underwriting in progress.',
+      nextStep:'Confirm appraisal status and coordinate final walkthrough',lastContact:daysAgo(1),
+      tags:['Under Contract','FHA Loan','Deadline'],activeProtocolId:'under_contract',protocolStep:1,
+      protocolStartedAt:daysAgo(7),propertiesShared:[],interestedProperties:[],
+      touredProperties:[],appointments:[{id:'apt-uw',type:'Final Walkthrough',date:daysFrom(2),notes:'Before closing on Monday'}],documents:[],agent_id:agentId,isDemo:true,
+      created_at:new Date().toISOString(),updated_at:new Date().toISOString()
+    },
+    {
+      id:'demo-5-'+pfx,name:'The Williamson Estate (Demo)',type:'Seller',stage:'Listing Appointment',
+      phone:'(555) 200-0005',email:'williamson.demo@example.com',source:'Sphere of Influence',
+      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA meeting scheduled for Thursday at 2pm.',
+      nextStep:'Complete CMA analysis and prepare compelling listing presentation',lastContact:daysAgo(3),
+      tags:['Listing Appointment','High Value','Luxury','Motivated'],activeProtocolId:'listing_appointment',protocolStep:0,
+      protocolStartedAt:daysAgo(2),propertiesShared:[],interestedProperties:[],
+      touredProperties:[],appointments:[{id:'apt-listing',type:'Listing Presentation',date:daysFrom(3),notes:'CMA meeting at their home, 2pm'}],documents:[],agent_id:agentId,isDemo:true,
       created_at:new Date().toISOString(),updated_at:new Date().toISOString()
     }
   ];
