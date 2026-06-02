@@ -1573,6 +1573,12 @@ async function getSession() {
   const { data } = await db.auth.getSession();
   return data.session?.user || null;
 }
+
+function generateUniqueEmail(email) {
+  const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const randomId = Math.random().toString(36).substr(2, 8);
+  return `${prefix}_${randomId}@agntai.app`;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── ANTHROPIC AI CONFIG ───────────────────────────────────────────────────────
@@ -7961,6 +7967,7 @@ function AuthPage({onAuth}){
           city:city.trim(),
           agent_status:agentStatus,
           access_code:ACCESS_CODE,
+          unique_email:generateUniqueEmail(email),
           is_new_signup:true
         },
         emailRedirectTo:window.location.origin+'/'   // ← always redirect to root after confirming
@@ -8252,6 +8259,15 @@ function ProfileModal({user, onClose, onSave}){
           React.createElement('div',{className:'fg fw'},
             React.createElement('label',{className:'fl'},'Email Address for sending'),
             React.createElement('input',{className:'fi',type:'email',placeholder:'e.g. your@email.com',value:gmailAddress,onChange:e=>setGmailAddress(e.target.value)})
+          )
+        ),
+        React.createElement('div',{className:'fr'},
+          React.createElement('div',{className:'fg fw'},
+            React.createElement('label',{className:'fl'},'Your Lead Capture Email'),
+            React.createElement('div',{style:{display:'flex',gap:8,alignItems:'stretch'}},
+              React.createElement('input',{className:'fi',type:'text',readOnly:true,value:meta.unique_email||'',style:{background:'#f8f7f5',cursor:'not-allowed'}})
+            ),
+            React.createElement('div',{style:{fontSize:11,color:'#6b6760',marginTop:6,lineHeight:1.5}},'Add this email to Zillow lead forms, landing pages, or email forwarding rules. Every email sent here becomes a new lead in your CRM.')
           )
         ),
         // Email handler preference — affects every Email button in the app
