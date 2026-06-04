@@ -22,19 +22,12 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
     );
 
-    // Query auth.users directly to find user with matching unique_email
-    const { data: { users }, error: usersError } = await supabase.auth.admin.listUsers();
-
-    if (usersError || !users) {
-      console.error("Error fetching users:", usersError);
-      return new Response("Error fetching users", { status: 500 });
-    }
-
+    const { data: users } = await supabase.auth.admin.listUsers();
     let agentId = null;
+
     for (const user of users) {
       if (user.user_metadata?.unique_email === recipient) {
         agentId = user.id;
-        console.log("Found agent:", agentId);
         break;
       }
     }
@@ -48,9 +41,7 @@ Deno.serve(async (req: Request) => {
     const senderName = from.replace(/<[^>]*>/, "").trim() || senderEmail;
     const leadId = crypto.randomUUID();
 
-    console.log("Creating lead with:", { leadId, agentId, senderName, senderEmail });
-
-    const { data, error } = await supabase.from("leads").insert({
+    const { error } = await supabase.from("leads").insert({
       id: leadId,
       agent_id: agentId,
       name: senderName,
@@ -69,7 +60,7 @@ Deno.serve(async (req: Request) => {
     console.log("Lead created successfully:", leadId);
     return new Response("OK", { status: 200 });
   } catch (error) {
-    console.error("Caught error:", error);
-    return new Response("Error: " + String(error), { status: 500 });
+    console.error("Error:", error);
+    return new Response("Error", { status: 500 });
   }
 });
