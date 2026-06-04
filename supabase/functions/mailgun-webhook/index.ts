@@ -22,20 +22,22 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
     );
 
-    const { data: users } = await supabase.auth.admin.listUsers();
-    let agentId = null;
+    const { data: listData, error: listError } = await supabase.auth.admin.listUsers({ perPage: 1000 });
 
-    for (const user of users) {
-      if (user.user_metadata?.unique_email === recipient) {
-        agentId = user.id;
-        break;
-      }
+    if (listError || !listData) {
+      console.error("Error fetching users:", listError);
+      return new Response("Error fetching users", { status: 500 });
     }
 
-    if (!agentId) {
+    const users = listData?.users ?? [];
+    const agent = users.find((u) => u.user_metadata?.unique_email === recipient);
+
+    if (!agent) {
       console.log("No agent found for email:", recipient);
       return new Response("User not found", { status: 404 });
     }
+
+    const agentId = agent.id;
 
     const senderEmail = from.split("<")[0].trim() || from;
     const senderName = from.replace(/<[^>]*>/, "").trim() || senderEmail;
