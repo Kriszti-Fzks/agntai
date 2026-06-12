@@ -6245,7 +6245,7 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
   return React.createElement('div',{className:'lp'},
     React.createElement('div',{className:'ph'},
       React.createElement('div',null,React.createElement('div',{className:'ph-t'},'CRM & Pipeline'),React.createElement('div',{className:'ph-s'},'Manage your leads and track every deal')),
-      React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+      React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
         selected.length>0&&React.createElement('button',{
           style:{display:'flex',alignItems:'center',gap:5,background:'#dc2626',color:'white',border:'none',borderRadius:6,padding:'8px 14px',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:'pointer'},
           onClick:bulkDelete
