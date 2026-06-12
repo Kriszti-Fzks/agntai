@@ -4573,10 +4573,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               if(quickLog==='call') doneCall(quickNote);
               else if(quickLog==='sms') doneSms(quickNote);
               else doneEmail(quickNote);
-              setQuickLog(null); setQuickNote('');
+              setMarkingSaved(quickLog);
+              setTimeout(() => { setQuickLog(null); setQuickNote(''); setMarkingSaved(null); }, 1500);
             },
-            style:{fontSize:11,padding:'5px 14px',background:'#1a6b4a',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}
-          }, quickNote.trim() ? 'Save' : (quickLog==='call'?'Just mark called':quickLog==='sms'?'Just mark texted':'Just mark emailed')),
+            style:{fontSize:11,padding:'5px 14px',background:markingSaved===quickLog?'#065f46':'#1a6b4a',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}
+          }, markingSaved===quickLog ? '✓ '+t.label.charAt(0).toUpperCase()+t.label.slice(1) : (quickNote.trim() ? 'Save' : (quickLog==='call'?'Just mark called':quickLog==='sms'?'Just mark texted':'Just mark emailed'))),
           React.createElement('button',{
             onClick:e=>{e.stopPropagation();setQuickLog(null);setQuickNote('');},
             style:{fontSize:11,padding:'5px 10px',background:'none',color:'#a09d98',border:'none',cursor:'pointer',fontFamily:'inherit',marginLeft:'auto'}
