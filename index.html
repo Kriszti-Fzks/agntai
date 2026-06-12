@@ -4354,6 +4354,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     const [quickLog, setQuickLog] = useState(null); // 'call'|'sms'|'email'
     const [quickNote, setQuickNote] = useState('');
     const [savingQuick, setSavingQuick] = useState(false);
+    const [markingSaved, setMarkingSaved] = useState(null); // 'call'|'sms'|'email' — shows green "✓ Logged!" feedback
 
     const doQuickLog = async (channel) => {
       if(quickLog===channel){ // already open — save and close
