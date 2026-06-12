@@ -10614,6 +10614,7 @@ function App(){
         setDbReady(true);
         Promise.all(demos.map(d=>dbSaveLead(d)))
           .then(()=>saveDemoTransaction(user.id))
+          .then(()=>dbLoadTransactions().then(txData=>setTransactions(txData||[])))
           .catch(()=>{});
         setOnboardStep('welcome');
       } else {
