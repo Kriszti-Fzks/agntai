@@ -4294,6 +4294,13 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     const [savingNote,setSavingNote]=React.useState(false);
     const [noRespJustClicked,setNoRespJustClicked]=React.useState(false);
 
+    // Reset tab to default when card closes (with guard to prevent infinite loop)
+    React.useEffect(()=>{
+      if(!isOpen && (activeTab[t.id] !== null && activeTab[t.id] !== undefined)) {
+        setActiveTab(p=>({...p,[t.id]:null}));
+      }
+    },[isOpen,t.id,activeTab]);
+
     const doneCall=(note)=>{
       // Only log a body if the user actually typed something. Empty note = just mark "I called",
       // don't fabricate content.
