@@ -4237,13 +4237,13 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     if(l){
       // Lease expiry task — move lead to Nurture and start post-close follow up
       if(t.id&&t.id.includes('-lease-expiry')){
-        onUpd({...l,lastContact:todayStr(),stage:'Nurture',
+        onUpd({...l,lastContact:todayStr,stage:'Nurture',
           activeProtocolId:'just_closed',protocolStep:0,
           protocolStartedAt:new Date().toISOString()});
       } else if(t.isProtocol&&l.activeProtocolId){
         const p=getProtocolById(l.activeProtocolId);const ns=(l.protocolStep||0)+1;const done=p&&ns>=p.steps.length;
-        onUpd({...l,lastContact:todayStr(),protocolStep:ns,activeProtocolId:done?null:l.activeProtocolId,protocolStartedAt:done?null:l.protocolStartedAt});
-      }else onUpd({...l,lastContact:todayStr()});
+        onUpd({...l,lastContact:todayStr,protocolStep:ns,activeProtocolId:done?null:l.activeProtocolId,protocolStartedAt:done?null:l.protocolStartedAt});
+      }else onUpd({...l,lastContact:todayStr});
     }
     setDone(p=>[...p,t.leadId]);
   };
