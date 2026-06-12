@@ -6203,6 +6203,7 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
   const [showImport,setShowImport]=useState(false);
   const [showNewsletter,setShowNewsletter]=useState(false);
   const [genNS,setGenNS]=useState(null); // which lead is generating next step
+  const [exportJustClicked,setExportJustClicked]=useState(false);
   // Listen for cross-component "open import modal" event from the experienced-agent fork
   React.useEffect(()=>{
     const handler = () => setShowImport(true);
@@ -6240,7 +6241,7 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
           onClick:()=>setShowImport(true)
         },'Import from Spreadsheet'),
         React.createElement('button',{
-          style:{display:'flex',alignItems:'center',gap:5,background:'#f3f2f0',color:'#1a1916',border:'1px solid #e8e6e2',borderRadius:6,padding:'8px 14px',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:'pointer'},
+          style:{display:'flex',alignItems:'center',gap:5,background:'#f3f2f0',color:exportJustClicked?'#065f46':'#1a1916',border:'1px solid '+(exportJustClicked?'#065f46':'#e8e6e2'),borderRadius:6,padding:'8px 14px',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:'pointer'},
           onClick:()=>{
             const headers=['Name','Type','Stage','Phone','Email','Source','Last Contact','Notes','Tags'];
             const rows=leads.map(l=>[
@@ -6254,8 +6255,10 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
             const a=document.createElement('a');
             a.href=url;a.download='my-leads-'+new Date().toISOString().slice(0,10)+'.csv';
             a.click();URL.revokeObjectURL(url);
+            setExportJustClicked(true);
+            setTimeout(()=>setExportJustClicked(false),2000);
           }
-        },'⬇ Export Leads'),
+        },exportJustClicked?'✓ Downloaded!':'⬇ Export Leads'),
         React.createElement('button',{
           style:{display:'flex',alignItems:'center',gap:5,background:'#f0faf5',color:'#1a6b4a',border:'1px solid #bbf0d8',borderRadius:6,padding:'8px 14px',fontSize:13,fontWeight:500,fontFamily:'inherit',cursor:'pointer'},
           onClick:()=>setShowNewsletter(true)
