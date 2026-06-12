@@ -8425,6 +8425,7 @@ function TransactionView({leads, user, startWithLead, onStartDone, onUpdate}) {
   const [extracting, setExtracting] = us(false);
   const [extractError, setExtractError] = us('');
   const [contractType, setContractType] = us('purchase');
+  const [copiedKey, setCopiedKey] = us(null);
 
   const emptyTx = {
     id: '', lead_id: '', side: 'buyer', status: 'under_contract',
@@ -9107,9 +9108,9 @@ Return ONLY valid JSON, no markdown:
             React.createElement('div', {style:{fontWeight:600,fontSize:12,color:'#a09d98',textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:8}}, label),
             React.createElement('div', {style:{fontSize:13,color:'#1a1916',lineHeight:1.7,whiteSpace:'pre-wrap'}}, val),
             React.createElement('button', {
-              onClick:()=>navigator.clipboard.writeText(val),
-              style:{background:'none',border:'1px solid #e8e6e2',borderRadius:5,padding:'4px 10px',fontSize:11,fontFamily:'inherit',cursor:'pointer',marginTop:8,color:'#6b6760'}
-            }, 'Copy')
+              onClick:()=>{navigator.clipboard.writeText(val);setCopiedKey(i);setTimeout(()=>setCopiedKey(prev=>prev===i?null:prev),2000);},
+              style:{background:'none',border:'1px solid '+(copiedKey===i?'#065f46':'#e8e6e2'),borderRadius:5,padding:'4px 10px',fontSize:11,fontFamily:'inherit',cursor:'pointer',marginTop:8,color:copiedKey===i?'#065f46':'#6b6760'}
+            }, copiedKey===i?'✓ Copied!':'Copy')
           )
         )
       ),
