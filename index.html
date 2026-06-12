@@ -6890,6 +6890,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
   const [genNS,setGenNS]=useState(false);
   const [completedSteps,setCompletedSteps]=useState(lead.completedSteps||[]);
   const [newCompletedNote,setNewCompletedNote]=useState('');
+  const [completedStepError,setCompletedStepError]=useState(false);
   const [tryAgainNote,setTryAgainNote]=useState('No answer');
   const [showTryAgain,setShowTryAgain]=useState(false);
   // Sync local state when the lead prop changes (e.g. after save)
@@ -7478,32 +7479,37 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
               )
             : React.createElement('div',{style:{fontSize:12,color:'#a09d98',fontStyle:'italic'}},'No completed steps yet — check off steps as you complete them'),
           // Add new completed step
-          React.createElement('div',{style:{display:'flex',gap:6,marginTop:4}},
-            React.createElement('input',{
-              className:'ei',
-              placeholder:'Note a completed step (AI will skip these next time)...',
-              value:newCompletedNote,
-              onChange:e=>setNewCompletedNote(e.target.value),
-              onKeyDown:e=>{
-                if(e.key==='Enter'&&newCompletedNote.trim()){
+          React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6,marginTop:4}},
+            React.createElement('div',{style:{display:'flex',gap:6}},
+              React.createElement('input',{
+                className:'ei',
+                placeholder:'Note a completed step (AI will skip these next time)...',
+                value:newCompletedNote,
+                onChange:e=>{setNewCompletedNote(e.target.value);setCompletedStepError(false);},
+                onKeyDown:e=>{
+                  if(e.key==='Enter'){
+                    if(!newCompletedNote.trim()){setCompletedStepError(true);return;}
+                    const updated=[...completedSteps,newCompletedNote.trim()];
+                    setCompletedSteps(updated);
+                    onUpd({...lead,completedSteps:updated});
+                    setNewCompletedNote('');
+                  }
+                },
+                style:{flex:1,borderColor:completedStepError?'#dc2626':'inherit'}
+              }),
+              React.createElement('button',{
+                className:'bs',
+                onClick:()=>{
+                  if(!newCompletedNote.trim()){setCompletedStepError(true);return;}
                   const updated=[...completedSteps,newCompletedNote.trim()];
                   setCompletedSteps(updated);
                   onUpd({...lead,completedSteps:updated});
                   setNewCompletedNote('');
+                  setCompletedStepError(false);
                 }
-              },
-              style:{flex:1}
-            }),
-            React.createElement('button',{
-              className:'bs',
-              onClick:()=>{
-                if(!newCompletedNote.trim())return;
-                const updated=[...completedSteps,newCompletedNote.trim()];
-                setCompletedSteps(updated);
-                onUpd({...lead,completedSteps:updated});
-                setNewCompletedNote('');
-              }
-            },'+ Add')
+              },'+ Add')
+            ),
+            completedStepError&&React.createElement('div',{style:{fontSize:11,color:'#dc2626',fontWeight:500}},'📝 Please enter a completed step')
           ),
           completedSteps.length>0&&React.createElement('div',{
             style:{fontSize:11,color:'#a09d98',marginTop:6,lineHeight:1.5}
