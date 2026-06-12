@@ -4210,6 +4210,13 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   const copy=(txt,id)=>{try{navigator.clipboard.writeText(txt);}catch(e){}setCopied(id);setTimeout(()=>setCopied(null),2000);};
   const touchContact=leadId=>{const l=leads.find(x=>x.id===leadId);if(l&&l.lastContact!==todayStr())onUpd({...l,lastContact:todayStr()});};
 
+  const refreshCommsForLead=async(leadId)=>{
+    const freshComms=await dbLoadCommunications(leadId);
+    setCommsMap(prev=>({...prev,[leadId]:freshComms}));
+    const lead=leads.find(l=>l.id===leadId);
+    if(lead){const a=getAutoProtocolAssignment(lead,freshComms,transactions);if(a)onUpd({...lead,...a});}
+  };
+
   const markCommSent=async(leadId,channel,subject,body)=>{
     await dbLogComm(leadId,channel,'outbound','sent',{subject,body,source:'today'});
     touchContact(leadId);
