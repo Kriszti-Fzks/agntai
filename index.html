@@ -4285,6 +4285,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     const [noteText,setNoteText]=React.useState('');
     const [noteChannel,setNoteChannel]=React.useState('note');
     const [savingNote,setSavingNote]=React.useState(false);
+    const [noRespJustClicked,setNoRespJustClicked]=React.useState(false);
 
     const doneCall=(note)=>{
       // Only log a body if the user actually typed something. Empty note = just mark "I called",
@@ -4539,8 +4540,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // SECONDARY OUTCOME ROW — what happened to a previous attempt?
       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:6,paddingTop:6,borderTop:'1px dashed #ececec'}},
         React.createElement('span',{style:{fontSize:10,color:'#a09d98',letterSpacing:'0.4px',textTransform:'uppercase',flexShrink:0}},'Still waiting?'),
-        React.createElement('button',{style:{background:'none',color:noRespCount>0?'#c2410c':'#6b6760',border:'1px solid '+(noRespCount>0?'#fed7aa':'#e8e6e2'),borderRadius:5,padding:'3px 9px',fontSize:11,cursor:'pointer',fontFamily:'inherit'},
-          onClick:e=>{e.stopPropagation();logNoResponse(t);}},noRespCount>0?'📵 No reply ('+noRespCount+'x)':'📵 Mark no reply')
+        React.createElement('button',{style:{background:'none',color:noRespJustClicked?'#065f46':(noRespCount>0?'#c2410c':'#6b6760'),border:'1px solid '+(noRespJustClicked?'#065f46':(noRespCount>0?'#fed7aa':'#e8e6e2')),borderRadius:5,padding:'3px 9px',fontSize:11,cursor:'pointer',fontFamily:'inherit',fontWeight:noRespJustClicked?600:400},
+          onClick:e=>{e.stopPropagation();logNoResponse(t);setNoRespJustClicked(true);setTimeout(()=>setNoRespJustClicked(false),2000);}},noRespJustClicked?'✓ Noted':'(noRespCount>0?'📵 No reply ('+noRespCount+'x)':'📵 Mark no reply'))
       ),
 
       // QUICK LOG NOTE DROP-DOWN
