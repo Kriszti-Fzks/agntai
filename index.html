@@ -4542,7 +4542,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // PRIMARY ACTION ROW — what are you doing right now?
       React.createElement('div',{className:'tc2-btns'},
         React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:ai?600:500},
-          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai)runAI(t);}}},
+          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script))runAI(t);}}},
           isGen?'✨ Writing your message...':ai?'✨ Message ready — tap to view':'✨ AI Write'),
         React.createElement('button',{className:'tb2',style:{background:quickLog==='call'?'#10b981':'none',color:quickLog==='call'?'white':'#6b6760',border:'1px solid '+(quickLog==='call'?'#10b981':'#e8e6e2'),fontSize:11},
           onClick:e=>{e.stopPropagation();doQuickLog('call');}},'📞 Called'),
