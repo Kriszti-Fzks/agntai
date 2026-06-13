@@ -3978,9 +3978,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         draftAi.text = decision.draftText;
       } else if(ch === 'email') {
         draftAi.email_subject = decision.subject || 'Following up';
-        draftAi.email_body = decision.draftText;
+        draftAi.email_body = decision.email_body;
       } else if(ch === 'call') {
-        draftAi.call_script = decision.draftText;
+        draftAi.call_script = decision.call_script;
       }
       updates[taskId] = draftAi;
     });
@@ -4734,7 +4734,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               ai&&React.createElement(React.Fragment,null,
                 React.createElement('div',{className:'scr-lbl',style:{color:'#7c3aed',marginBottom:8}},'✨ AI call script — use as a guide'),
                 React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
-                  ...ai.call_script.split('\n').filter(l=>l.trim()).map((line,i)=>{
+                  ...(ai?.call_script || '').split('\n').filter(l=>l.trim()).map((line,i)=>{
                     const isH=line.includes(':')&&line.split(':')[0].length<25&&line.split(':')[0]===line.split(':')[0].toUpperCase();
                     if(isH){const[lbl,...rest]=line.split(':');return React.createElement('div',{key:i,style:{background:'#f5f3ff',border:'1px solid #e9d5ff',borderRadius:7,padding:'10px 12px'}},React.createElement('div',{style:{fontSize:10,fontWeight:700,textTransform:'uppercase',color:'#7c3aed',marginBottom:4}},lbl),React.createElement('div',{style:{fontSize:13,lineHeight:1.6}},rest.join(':').trim()));}
                     return React.createElement('div',{key:i,style:{fontSize:13,color:'#6b6760',paddingLeft:4}},line);
