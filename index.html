@@ -3769,14 +3769,29 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             const parsed = JSON.parse(cached);
             // New envelope format
             if(parsed && typeof parsed === 'object' && parsed.byLeadId) {
-              setTriageMap(parsed.byLeadId);
-              setTriageTimestamp(parsed.timestamp || null);
+              // Validate timestamp is from today (not stale)
+              if(parsed.timestamp) {
+                const cacheDate = new Date(parsed.timestamp).toDateString();
+                const todayDate = new Date().toDateString();
+                if(cacheDate === todayDate) {
+                  setTriageMap(parsed.byLeadId);
+                  setTriageTimestamp(parsed.timestamp);
+                  setTriageLoaded(true);
+                  foundToday = true;
+                }
+              } else {
+                // No timestamp — assume it's fresh (legacy format)
+                setTriageMap(parsed.byLeadId);
+                setTriageTimestamp(null);
+                setTriageLoaded(true);
+                foundToday = true;
+              }
             } else {
-              // Legacy format — just the byLeadId object
+              // Legacy format — just the byLeadId object (assume fresh)
               setTriageMap(parsed);
+              setTriageLoaded(true);
+              foundToday = true;
             }
-            setTriageLoaded(true);
-            foundToday = true;
           }
         } catch(e) {}
         // If today's cache is missing, try YESTERDAY'S so we can show it faded
@@ -3886,6 +3901,30 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     };
     window.addEventListener('leads-changed', handler);
     return () => window.removeEventListener('leads-changed', handler);
+  }, []);
+
+  // ── DATE-CHANGE DETECTION ──────────────────────────────────────────────────
+  // If tab stays open overnight, triageLoaded state becomes stale. When visibility
+  // changes (user returns after date rolled over), detect the date change and reset
+  // triage state so auto-run fires for the new day.
+  React.useEffect(() => {
+    let lastDateStr = todayStr;
+    const checkDateChange = () => {
+      const d = new Date();
+      const newDateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      if(newDateStr !== lastDateStr) {
+        lastDateStr = newDateStr;
+        setTriageLoaded(false);
+        setTriageMap({});
+        setTriageTimestamp(null);
+        setTriagePreviousMap({});
+      }
+    };
+    const handleVisibility = () => {
+      if(!document.hidden) checkDateChange();
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    return () => window.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
 
