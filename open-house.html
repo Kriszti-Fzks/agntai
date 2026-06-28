@@ -186,19 +186,6 @@
       font-size: 14px;
       color: #1a6b4a;
     }
-    .loading { text-align: center; padding: 40px 20px; color: #6b6760; }
-    .spinner {
-      display: inline-block;
-      width: 32px;
-      height: 32px;
-      border: 3px solid #e0e0e0;
-      border-top-color: #1a6b4a;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
   </style>
 </head>
 <body>
@@ -208,12 +195,7 @@
       <div class="logo-text">Agntai</div>
       <div class="header-line"></div>
 
-      <div id="loading" class="loading">
-        <div class="spinner"></div>
-        <p>Loading property details...</p>
-      </div>
-
-      <div id="propertyInfo" style="display: none;">
+      <div id="propertyInfo">
         <div class="property-address" id="address"></div>
         <div class="property-meta" id="date"></div>
         <div class="property-price" id="price"></div>
@@ -274,64 +256,45 @@
     const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2amRoZ3lhcWJ1cXRqYnFsbnUiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTcxNjMzNDMyOSwiZXhwIjoxODc0MDEwMzI5fQ.LwAc8a1-Eb-u0sWGWpBK4dXaEiLXQOYvFVU_uHMbj4E";
     const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
-    const openHouseId = new URLSearchParams(window.location.search).get("id");
+    const urlParams = new URLSearchParams(window.location.search);
+    const openHouseId = urlParams.get("id");
+    const address = urlParams.get("address") || "Property Address";
+    const date = urlParams.get("date");
+    const price = urlParams.get("price");
+    const bedrooms = urlParams.get("bedrooms");
+    const bathrooms = urlParams.get("bathrooms");
+    const sqft = urlParams.get("sqft");
 
     if (!openHouseId) {
-      document.getElementById("loading").innerHTML = "<p>Invalid link. No open house ID provided.</p>";
+      document.getElementById("propertyInfo").innerHTML = "<p>Invalid link. No property found.</p>";
     } else {
-      loadOpenHouse();
+      loadProperty();
     }
 
     function capitalizeAddress(addr) {
       return addr.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
     }
 
-    function generateQRImageUrl(text) {
-      return 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(text);
-    }
+    function loadProperty() {
+      document.getElementById("address").textContent = capitalizeAddress(address);
 
-    async function loadOpenHouse() {
-      try {
-        console.log('Loading open house with ID:', openHouseId);
-        const { data, error } = await supabase
-          .from("open_houses")
-          .select("*")
-          .eq("id", openHouseId)
-          .single();
-
-        console.log('Query result - Data:', data, 'Error:', error);
-
-        if (error) {
-          console.error('Database error:', error);
-          throw new Error("Failed to load property: " + error.message);
-        }
-        if (!data) {
-          throw new Error("Property not found with ID: " + openHouseId);
-        }
-
-        document.getElementById("address").textContent = capitalizeAddress(data.address);
-        document.getElementById("date").textContent = new Date(data.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-        const priceText = data.price ? (data.price.startsWith('$') ? data.price : '$ ' + data.price) : '';
-        document.getElementById("price").textContent = priceText;
-
-        const details = [];
-        if (data.bedrooms) details.push(`🛏️ ${data.bedrooms} Bed${data.bedrooms !== 1 ? 's' : ''}`);
-        if (data.bathrooms) details.push(`🚿 ${data.bathrooms} Bath${data.bathrooms !== 1 ? 's' : ''}`);
-        if (data.size_sqft) details.push(`📐 ${data.size_sqft.toLocaleString()} sq ft`);
-        if (data.notes) details.push(`📝 ${data.notes}`);
-
-        const detailsHtml = details.map(d => `<div class="detail-item">${d}</div>`).join('');
-        document.getElementById("details").innerHTML = detailsHtml;
-
-        const qrUrl = `https://agntai.app/open-house?id=${openHouseId}`;
-        document.getElementById('qr').src = generateQRImageUrl(qrUrl);
-
-        document.getElementById("loading").style.display = "none";
-        document.getElementById("propertyInfo").style.display = "block";
-      } catch (err) {
-        document.getElementById("loading").innerHTML = `<p>Error loading property details: ${err.message}</p>`;
+      if (date) {
+        document.getElementById("date").textContent = new Date(date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       }
+
+      const priceText = price ? (price.startsWith('$') ? price : '$ ' + price) : '';
+      document.getElementById("price").textContent = priceText;
+
+      const details = [];
+      if (bedrooms) details.push(`🛏️ ${bedrooms} Bed${bedrooms !== 1 ? 's' : ''}`);
+      if (bathrooms) details.push(`🚿 ${bathrooms} Bath${bathrooms !== 1 ? 's' : ''}`);
+      if (sqft) details.push(`📐 ${sqft.toLocaleString()} sq ft`);
+
+      const detailsHtml = details.map(d => `<div class="detail-item">${d}</div>`).join('');
+      document.getElementById("details").innerHTML = detailsHtml;
+
+      const qrUrl = `https://agntai.app/open-house?id=${openHouseId}&address=${encodeURIComponent(address)}&date=${encodeURIComponent(date || '')}&price=${encodeURIComponent(price || '')}&bedrooms=${encodeURIComponent(bedrooms || '')}&bathrooms=${encodeURIComponent(bathrooms || '')}&sqft=${encodeURIComponent(sqft || '')}`;
+      document.getElementById('qr').src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(qrUrl);
     }
 
     document.getElementById("visitorForm").addEventListener("submit", async (e) => {
@@ -365,6 +328,12 @@
               phone,
               email,
               has_agent: hasAgent,
+              address,
+              date,
+              price,
+              bedrooms,
+              bathrooms,
+              sqft
             }),
           }
         );

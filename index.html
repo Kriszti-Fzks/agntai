@@ -10601,12 +10601,21 @@ function OpenHouseView({user,db,leads,onAddLead}){
     }
   };
 
-  const generateQRUrl=(ohId)=>{
-    return `https://agntai.app/open-house?id=${ohId}`;
+  const generateQRUrl=(oh)=>{
+    const params = new URLSearchParams({
+      id: oh.id,
+      address: oh.address,
+      date: oh.date,
+      price: oh.price || '',
+      bedrooms: oh.bedrooms || '',
+      bathrooms: oh.bathrooms || '',
+      sqft: oh.size_sqft || ''
+    });
+    return `https://agntai.app/open-house?${params.toString()}`;
   };
 
   const printFlyer=(oh)=>{
-    const url=generateQRUrl(oh.id);
+    const url=generateQRUrl(oh);
     const qrImageUrl='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(url);
     const w=window.open('','_blank');
     if(!w) return;
@@ -10740,11 +10749,11 @@ function OpenHouseView({user,db,leads,onAddLead}){
             leadsForOpenHouse(oh.id)+' visitor(s) registered'
           ),
           React.createElement('div',{style:{textAlign:'center',marginBottom:12,padding:'12px',background:'#f9f8f6',borderRadius:6}},
-            React.createElement('img',{src:'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(generateQRUrl(oh.id)),style:{maxWidth:'100%',height:'auto'},alt:'QR Code'})
+            React.createElement('img',{src:'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(generateQRUrl(oh)),style:{maxWidth:'100%',height:'auto'},alt:'QR Code'})
           ),
           React.createElement('div',{style:{display:'flex',gap:8}},
             React.createElement('button',{onClick:()=>printFlyer(oh),style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🖨 Print'),
-            React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh.id));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link')
+            React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link')
           )
         ))
       )
