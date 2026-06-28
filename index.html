@@ -10616,9 +10616,14 @@ function OpenHouseView({user,db,leads,onAddLead}){
 
   const printFlyer=(oh)=>{
     const url=generateQRUrl(oh);
-    const qrImageUrl='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(url);
+    const qrImageUrl='https://api.qrserver.com/v1/create-qr-code/?size=240x240&data='+encodeURIComponent(url);
     const w=window.open('','_blank');
     if(!w) return;
+    const formatDate=(dateStr)=>{
+      const d=new Date(dateStr);
+      return d.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+    };
+    const formatAddress=(addr)=>addr.split(' ').map(word=>word.charAt(0).toUpperCase()+word.slice(1).toLowerCase()).join(' ');
     const html=`
 <!DOCTYPE html>
 <html>
@@ -10627,33 +10632,22 @@ function OpenHouseView({user,db,leads,onAddLead}){
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Open House Flyer</title>
   <style>
-    body{font-family:sans-serif;margin:0;padding:40px;max-width:800px;margin:0 auto;}
-    .header{text-align:center;margin-bottom:40px;border-bottom:2px solid #1a6b4a;padding-bottom:20px;}
-    .logo{font-size:36px;font-weight:700;color:#1a6b4a;margin-bottom:10px;}
-    .property{margin:40px 0;padding:20px;background:#f9f8f6;border-left:4px solid #1a6b4a;border-radius:6px;}
-    .address{font-size:28px;font-weight:600;margin-bottom:10px;}
-    .details{font-size:16px;line-height:1.8;color:#666;}
-    .qr-section{text-align:center;margin:40px 0;}
-    .qr-image{width:200px;height:200px;margin:20px auto;}
-    .qr-label{font-size:18px;font-weight:600;margin-top:20px;color:#1a6b4a;}
-    @media print{body{padding:20px;}}
+    body{font-family:sans-serif;margin:0;padding:60px 40px;max-width:600px;margin:0 auto;text-align:center;}
+    .logo{font-size:48px;margin-bottom:20px;}
+    .address{font-size:36px;font-weight:700;color:#1a1916;margin:40px 0 20px 0;}
+    .date{font-size:18px;color:#6b6760;margin-bottom:40px;}
+    .price{font-size:22px;font-weight:600;color:#1a6b4a;margin-bottom:60px;}
+    .qr-section{margin:60px 0;}
+    .qr-image{width:240px;height:240px;margin:0 auto;}
+    .qr-label{font-size:16px;font-weight:600;color:#1a6b4a;margin-top:20px;}
+    @media print{body{padding:40px 20px;}}
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">🏠 Agntai</div>
-    <div style="font-size:20px;color:#6b6760;">Open House Registration</div>
-  </div>
-  <div class="property">
-    <div class="address">${oh.address}</div>
-    <div class="details">
-      📅 ${oh.date}${oh.time?' at '+oh.time:''}<br>
-      ${oh.bedrooms?'🛏️ '+oh.bedrooms+' bed(s)<br>':''}
-      ${oh.bathrooms?'🚿 '+oh.bathrooms+' bath(s)<br>':''}
-      ${oh.size_sqft?'📐 '+oh.size_sqft.toLocaleString()+' sq ft<br>':''}
-      ${oh.price?'💰 '+oh.price:''}
-    </div>
-  </div>
+  <div class="logo">🏠</div>
+  <div class="address">${formatAddress(oh.address)}</div>
+  <div class="date">${formatDate(oh.date)}</div>
+  <div class="price">${oh.price?(oh.price.startsWith('$')?oh.price:'$ '+oh.price):''}</div>
   <div class="qr-section">
     <img src="${qrImageUrl}" class="qr-image" alt="QR Code">
     <div class="qr-label">Scan to Register Your Visit</div>
