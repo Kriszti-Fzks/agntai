@@ -169,7 +169,10 @@
             "https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/open-house-submit",
             {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2amRoZ3lhcWJ1ZnF0amJxbG51Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTYzMzQzMjksImV4cCI6MTg3NDAxMDMyOX0.Ig6fZKfaPvGkXQnfpfJT5fy-2HvWw2JIRlZnxV1DbqE"
+              },
               body: JSON.stringify({
                 open_house_id: openHouseId,
                 name,
