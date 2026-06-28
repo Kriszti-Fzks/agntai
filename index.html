@@ -10607,9 +10607,9 @@ function OpenHouseView({user,db,leads,onAddLead}){
 
   const printFlyer=(oh)=>{
     const url=generateQRUrl(oh.id);
+    const qrImageUrl='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(url);
     const w=window.open('','_blank');
     if(!w) return;
-    const qrDiv=`<div id="qr" style="width:200px;height:200px;margin:20px auto;"></div>`;
     const html=`
 <!DOCTYPE html>
 <html>
@@ -10617,7 +10617,6 @@ function OpenHouseView({user,db,leads,onAddLead}){
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Open House Flyer</title>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
   <style>
     body{font-family:sans-serif;margin:0;padding:40px;max-width:800px;margin:0 auto;}
     .header{text-align:center;margin-bottom:40px;border-bottom:2px solid #1a6b4a;padding-bottom:20px;}
@@ -10626,6 +10625,7 @@ function OpenHouseView({user,db,leads,onAddLead}){
     .address{font-size:28px;font-weight:600;margin-bottom:10px;}
     .details{font-size:16px;line-height:1.8;color:#666;}
     .qr-section{text-align:center;margin:40px 0;}
+    .qr-image{width:200px;height:200px;margin:20px auto;}
     .qr-label{font-size:18px;font-weight:600;margin-top:20px;color:#1a6b4a;}
     @media print{body{padding:20px;}}
   </style>
@@ -10646,14 +10646,9 @@ function OpenHouseView({user,db,leads,onAddLead}){
     </div>
   </div>
   <div class="qr-section">
-    ${qrDiv}
+    <img src="${qrImageUrl}" class="qr-image" alt="QR Code">
     <div class="qr-label">Scan to Register Your Visit</div>
   </div>
-  <script>
-    QRCode.toCanvas(document.getElementById('qr'),'${url}',{width:200},function(err){
-      if(err) console.error(err);
-    });
-  <\/script>
 </body>
 </html>
     `;
@@ -10745,9 +10740,7 @@ function OpenHouseView({user,db,leads,onAddLead}){
             leadsForOpenHouse(oh.id)+' visitor(s) registered'
           ),
           React.createElement('div',{style:{textAlign:'center',marginBottom:12,padding:'12px',background:'#f9f8f6',borderRadius:6}},
-            React.createElement('canvas',{id:'qr-'+oh.id,style:{maxWidth:'100%'},ref:canvas=>{
-              if(canvas&&!canvas._qrGenerated) try{QRCode.toCanvas(canvas,generateQRUrl(oh.id),{width:160,margin:1},()=>{canvas._qrGenerated=true;})}catch(e){}
-            }})
+            React.createElement('img',{src:'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(generateQRUrl(oh.id)),style:{maxWidth:'100%',height:'auto'},alt:'QR Code'})
           ),
           React.createElement('div',{style:{display:'flex',gap:8}},
             React.createElement('button',{onClick:()=>printFlyer(oh),style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🖨 Print'),
