@@ -20,14 +20,22 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const { open_house_id, name, phone, email, has_agent } = body;
 
+    console.log("Received request with open_house_id:", open_house_id, "name:", name);
+
     if (!open_house_id || !name || !phone || !email) {
-      return new Response("Missing required fields", { status: 400 });
+      console.error("Missing fields - open_house_id:", open_house_id, "name:", name, "phone:", phone, "email:", email);
+      return new Response(JSON.stringify({ error: "Missing required fields" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") || "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl || !supabaseKey) {
+      console.error("Missing Supabase environment variables");
+      return new Response(JSON.stringify({ error: "Server configuration error" }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Fetch open house details
     const { data: openHouse, error: ohError } = await supabase
@@ -37,9 +45,11 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (ohError || !openHouse) {
-      console.error("Open house not found:", open_house_id);
-      return new Response("Open house not found", { status: 404 });
+      console.error("Open house not found. ID:", open_house_id, "Error:", ohError);
+      return new Response(JSON.stringify({ error: "Open house not found: " + (ohError?.message || "not in database") }), { status: 404, headers: { "Content-Type": "application/json" } });
     }
+
+    console.log("Found open house:", openHouse.id, "with agent_id:", openHouse.agent_id);
 
     // Build lead notes from open house details
     const leadNotes = `Open House: ${openHouse.address}
