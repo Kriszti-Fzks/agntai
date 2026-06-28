@@ -8040,6 +8040,14 @@ function AuthPage({onAuth}){
     });
     setBusy(false);
     if(r.error){setErr(r.error.message);return;}
+    // Save inbound email to agent_inbound_addresses for webhook routing
+    if(r.data?.user?.id){
+      const uniqueEmail=generateUniqueEmail(email);
+      await db.from('agent_inbound_addresses').insert({
+        agent_id:r.data.user.id,
+        email:uniqueEmail
+      });
+    }
     // Supabase sends a confirmation email — show the check-email screen
     setSignedUpEmail(email);
     setMode('check-email');
