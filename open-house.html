@@ -292,14 +292,21 @@
 
     async function loadOpenHouse() {
       try {
+        console.log('Loading open house with ID:', openHouseId);
         const { data, error } = await supabase
           .from("open_houses")
           .select("*")
           .eq("id", openHouseId)
           .single();
 
-        if (error || !data) {
-          throw new Error("Open house not found");
+        console.log('Query result - Data:', data, 'Error:', error);
+
+        if (error) {
+          console.error('Database error:', error);
+          throw new Error("Failed to load property: " + error.message);
+        }
+        if (!data) {
+          throw new Error("Property not found with ID: " + openHouseId);
         }
 
         document.getElementById("address").textContent = capitalizeAddress(data.address);
