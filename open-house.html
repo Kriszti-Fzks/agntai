@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Open House Registration — Agntai</title>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -72,15 +71,20 @@
       justify-content: center;
       gap: 6px;
     }
-    #qr-container {
+    .qr-container {
       margin: 40px auto;
       display: flex;
       justify-content: center;
       align-items: center;
       min-height: 220px;
+      padding: 20px;
+      background: #f9f8f6;
+      border-radius: 8px;
     }
-    #qr {
-      max-width: 100%;
+    .qr-container img {
+      max-width: 200px;
+      width: 100%;
+      height: auto;
     }
     .qr-label {
       font-size: 16px;
@@ -216,8 +220,8 @@
 
         <div class="property-details" id="details"></div>
 
-        <div id="qr-container">
-          <canvas id="qr"></canvas>
+        <div class="qr-container">
+          <img id="qr" alt="QR Code">
         </div>
         <div class="qr-label">Scan to Register Your Visit</div>
 
@@ -282,6 +286,10 @@
       return addr.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
     }
 
+    function generateQRImageUrl(text) {
+      return 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(text);
+    }
+
     async function loadOpenHouse() {
       try {
         const { data, error } = await supabase
@@ -294,17 +302,12 @@
           throw new Error("Open house not found");
         }
 
-        // Format address with proper capitalization
         document.getElementById("address").textContent = capitalizeAddress(data.address);
-
-        // Format date (no time)
         document.getElementById("date").textContent = new Date(data.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-        // Format price with $ symbol
         const priceText = data.price ? (data.price.startsWith('$') ? data.price : '$ ' + data.price) : '';
         document.getElementById("price").textContent = priceText;
 
-        // Format property details
         const details = [];
         if (data.bedrooms) details.push(`🛏️ ${data.bedrooms} Bed${data.bedrooms !== 1 ? 's' : ''}`);
         if (data.bathrooms) details.push(`🚿 ${data.bathrooms} Bath${data.bathrooms !== 1 ? 's' : ''}`);
@@ -314,11 +317,8 @@
         const detailsHtml = details.map(d => `<div class="detail-item">${d}</div>`).join('');
         document.getElementById("details").innerHTML = detailsHtml;
 
-        // Generate QR code
         const qrUrl = `https://agntai.app/open-house?id=${openHouseId}`;
-        QRCode.toCanvas(document.getElementById('qr'), qrUrl, { width: 200, margin: 1 }, (err) => {
-          if (err) console.error('QR Code generation failed:', err);
-        });
+        document.getElementById('qr').src = generateQRImageUrl(qrUrl);
 
         document.getElementById("loading").style.display = "none";
         document.getElementById("propertyInfo").style.display = "block";
