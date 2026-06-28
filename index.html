@@ -11,6 +11,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400&family=Fraunces:ital,wght@0,400;0,500;1,400;1,500&display=swap" rel="stylesheet">
 <style>
@@ -9258,6 +9259,7 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
       React.createElement('div',{className:'sb-i'+(view==='assistant'?' on':''),onClick:()=>sv('assistant')},'✨',React.createElement('span',{className:'sb-i-text'},' AI Assistant')),
       React.createElement('div',{className:'sb-i'+(view==='crm'?' on':''),onClick:()=>sv('crm')},'▦',React.createElement('span',{className:'sb-i-text'},' CRM & Pipeline')),
       React.createElement('div',{className:'sb-i'+(view==='calendar'?' on':''),onClick:()=>sv('calendar')},'📅',React.createElement('span',{className:'sb-i-text'},' Calendar')),
+      React.createElement('div',{className:'sb-i'+(view==='open-houses'?' on':''),onClick:()=>sv('open-houses')},'🏠',React.createElement('span',{className:'sb-i-text'},' Open Houses')),
       React.createElement('div',{className:'sb-i'+(view==='transactions'?' on':''),onClick:()=>sv('transactions')},'📋',React.createElement('span',{className:'sb-i-text'},' Transactions'))
     ),
     React.createElement('div',{className:'sb-ft'},
@@ -10542,6 +10544,221 @@ function _formatWhen(m) {
   return s;
 }
 
+function OpenHouseView({user,db,leads,onAddLead}){
+  const [openHouses,setOpenHouses]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [showForm,setShowForm]=useState(false);
+  const [formData,setFormData]=useState({address:'',date:'',time:'',price:'',bedrooms:'',bathrooms:'',size_sqft:'',notes:''});
+  const [err,setErr]=useState('');
+  const [busy,setBusy]=useState(false);
+
+  useEffect(()=>{
+    if(!user) return;
+    dbLoadOpenHouses();
+  },[user]);
+
+  const dbLoadOpenHouses=async()=>{
+    setLoading(true);
+    try{
+      const {data,error}=await db.from('open_houses').select('*').eq('agent_id',user.id).order('date','desc');
+      if(error) throw error;
+      setOpenHouses(data||[]);
+    }catch(e){
+      console.error('Error loading open houses:',e);
+      setErr('Failed to load open houses');
+    }finally{
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit=async(e)=>{
+    e.preventDefault();
+    setErr('');
+    if(!formData.address.trim()){setErr('Address is required');return;}
+    if(!formData.date){setErr('Date is required');return;}
+    setBusy(true);
+    try{
+      const {data,error}=await db.from('open_houses').insert({
+        agent_id:user.id,
+        address:formData.address.trim(),
+        date:formData.date,
+        time:formData.time||null,
+        price:formData.price||null,
+        bedrooms:formData.bedrooms?parseInt(formData.bedrooms):null,
+        bathrooms:formData.bathrooms?parseFloat(formData.bathrooms):null,
+        size_sqft:formData.size_sqft?parseInt(formData.size_sqft):null,
+        notes:formData.notes||null
+      }).select();
+      if(error) throw error;
+      setOpenHouses([...openHouses,...(data||[])]);
+      setFormData({address:'',date:'',time:'',price:'',bedrooms:'',bathrooms:'',size_sqft:'',notes:''});
+      setShowForm(false);
+    }catch(e){
+      console.error('Error creating open house:',e);
+      setErr('Failed to create open house');
+    }finally{
+      setBusy(false);
+    }
+  };
+
+  const generateQRUrl=(ohId)=>{
+    return `https://agntai.app/open-house?id=${ohId}`;
+  };
+
+  const printFlyer=(oh)=>{
+    const url=generateQRUrl(oh.id);
+    const w=window.open('','_blank');
+    if(!w) return;
+    const qrDiv=`<div id="qr" style="width:200px;height:200px;margin:20px auto;"></div>`;
+    const html=`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Open House Flyer</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"><\/script>
+  <style>
+    body{font-family:sans-serif;margin:0;padding:40px;max-width:800px;margin:0 auto;}
+    .header{text-align:center;margin-bottom:40px;border-bottom:2px solid #1a6b4a;padding-bottom:20px;}
+    .logo{font-size:36px;font-weight:700;color:#1a6b4a;margin-bottom:10px;}
+    .property{margin:40px 0;padding:20px;background:#f9f8f6;border-left:4px solid #1a6b4a;border-radius:6px;}
+    .address{font-size:28px;font-weight:600;margin-bottom:10px;}
+    .details{font-size:16px;line-height:1.8;color:#666;}
+    .qr-section{text-align:center;margin:40px 0;}
+    .qr-label{font-size:18px;font-weight:600;margin-top:20px;color:#1a6b4a;}
+    @media print{body{padding:20px;}}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">🏠 Agntai</div>
+    <div style="font-size:20px;color:#6b6760;">Open House Registration</div>
+  </div>
+  <div class="property">
+    <div class="address">${oh.address}</div>
+    <div class="details">
+      📅 ${oh.date}${oh.time?' at '+oh.time:''}<br>
+      ${oh.bedrooms?'🛏️ '+oh.bedrooms+' bed(s)<br>':''}
+      ${oh.bathrooms?'🚿 '+oh.bathrooms+' bath(s)<br>':''}
+      ${oh.size_sqft?'📐 '+oh.size_sqft.toLocaleString()+' sq ft<br>':''}
+      ${oh.price?'💰 '+oh.price:''}
+    </div>
+  </div>
+  <div class="qr-section">
+    ${qrDiv}
+    <div class="qr-label">Scan to Register Your Visit</div>
+  </div>
+  <script>
+    QRCode.toCanvas(document.getElementById('qr'),'${url}',{width:200},function(err){
+      if(err) console.error(err);
+    });
+  <\/script>
+</body>
+</html>
+    `;
+    w.document.write(html);
+    w.document.close();
+    setTimeout(()=>w.print(),500);
+  };
+
+  const leadsForOpenHouse=(ohId)=>{
+    return leads.filter(l=>l.notes&&l.notes.includes('Open House:')&&l.notes.includes(ohId)).length;
+  };
+
+  if(loading) return React.createElement('div',{className:'vh',style:{display:'flex',alignItems:'center',justifyContent:'center'}},
+    React.createElement('div',null,'Loading open houses...')
+  );
+
+  return React.createElement('div',{className:'vh'},
+    React.createElement('div',{className:'vh-header'},
+      React.createElement('h1',null,'📍 Open Houses'),
+      React.createElement('button',{
+        style:{background:'#1a6b4a',color:'white',border:'none',borderRadius:6,padding:'10px 16px',fontSize:14,fontWeight:600,cursor:'pointer'},
+        onClick:()=>setShowForm(true)
+      },'+ New Open House')
+    ),
+    React.createElement('div',{className:'vh-content'},
+      err&&React.createElement('div',{style:{background:'#fee',border:'1px solid #fcc',borderRadius:6,padding:12,marginBottom:20,color:'#c00',fontSize:13}},err),
+
+      showForm&&React.createElement('div',{style:{background:'#f9f8f6',borderRadius:8,padding:20,marginBottom:30,border:'1px solid #e0dcd4'}},
+        React.createElement('h2',{style:{fontSize:18,marginBottom:16}},'Create Open House'),
+        React.createElement('form',{onSubmit:handleSubmit,style:{display:'grid',gap:16}},
+          React.createElement('div',null,
+            React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Address *'),
+            React.createElement('input',{type:'text',value:formData.address,onChange:e=>setFormData({...formData,address:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'123 Main St, San Francisco, CA'})
+          ),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+            React.createElement('div',null,
+              React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Date *'),
+              React.createElement('input',{type:'date',value:formData.date,onChange:e=>setFormData({...formData,date:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'}})
+            ),
+            React.createElement('div',null,
+              React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Time (optional)'),
+              React.createElement('input',{type:'text',value:formData.time,onChange:e=>setFormData({...formData,time:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'2:00 PM – 4:00 PM'})
+            )
+          ),
+          React.createElement('div',null,
+            React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Price (optional)'),
+            React.createElement('input',{type:'text',value:formData.price,onChange:e=>setFormData({...formData,price:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'$1,250,000'})
+          ),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}},
+            React.createElement('div',null,
+              React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Beds'),
+              React.createElement('input',{type:'number',value:formData.bedrooms,onChange:e=>setFormData({...formData,bedrooms:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'3'})
+            ),
+            React.createElement('div',null,
+              React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Baths'),
+              React.createElement('input',{type:'number',step:'0.5',value:formData.bathrooms,onChange:e=>setFormData({...formData,bathrooms:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'2'})
+            ),
+            React.createElement('div',null,
+              React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Sq Ft'),
+              React.createElement('input',{type:'number',value:formData.size_sqft,onChange:e=>setFormData({...formData,size_sqft:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit'},placeholder:'2500'})
+            )
+          ),
+          React.createElement('div',null,
+            React.createElement('label',{style:{display:'block',fontSize:13,fontWeight:600,marginBottom:6,color:'#6b6760'}},'Notes (optional)'),
+            React.createElement('textarea',{value:formData.notes,onChange:e=>setFormData({...formData,notes:e.target.value}),style:{width:'100%',padding:'10px 12px',border:'1px solid #d5d0c8',borderRadius:6,fontSize:14,fontFamily:'inherit',minHeight:80},placeholder:'Additional details...'})
+          ),
+          React.createElement('div',{style:{display:'flex',gap:12}},
+            React.createElement('button',{type:'submit',disabled:busy,style:{flex:1,padding:'11px 16px',background:busy?'#b5b0a8':'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:14,fontWeight:600,cursor:busy?'default':'pointer'}},busy?'Creating...':'Create'),
+            React.createElement('button',{type:'button',onClick:()=>setShowForm(false),style:{flex:1,padding:'11px 16px',background:'#e0dcd4',color:'#1a1916',border:'none',borderRadius:6,fontSize:14,fontWeight:600,cursor:'pointer'}},'Cancel')
+          )
+        )
+      ),
+
+      openHouses.length===0?React.createElement('div',{style:{textAlign:'center',padding:'40px 20px',color:'#6b6760'}},
+        React.createElement('div',{style:{fontSize:48,marginBottom:12}},'🏠'),
+        React.createElement('div',{style:{fontSize:16,fontWeight:600,marginBottom:8}},'No open houses yet'),
+        React.createElement('div',null,'Click "New Open House" to create your first open house and generate QR codes for visitors.')
+      ):React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:20}},
+        openHouses.map(oh=>React.createElement('div',{key:oh.id,style:{background:'white',borderRadius:8,padding:20,border:'1px solid #e0dcd4',boxShadow:'0 1px 3px rgba(0,0,0,0.05)'}},
+          React.createElement('div',{style:{fontSize:16,fontWeight:600,marginBottom:8,color:'#1a1916'}},oh.address),
+          React.createElement('div',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},
+            '📅 '+oh.date+(oh.time?' • '+oh.time:''),React.createElement('br'),
+            oh.bedrooms?'🛏️ '+oh.bedrooms+' bed(s)':'',oh.bedrooms&&oh.bathrooms?' • ':'',
+            oh.bathrooms?'🚿 '+oh.bathrooms+' bath(s)':'',React.createElement('br'),
+            oh.size_sqft?'📐 '+oh.size_sqft.toLocaleString()+' sq ft':'',oh.size_sqft&&oh.price?' • ':'',
+            oh.price?'💰 '+oh.price:''
+          ),
+          React.createElement('div',{style:{fontSize:12,color:'#1a6b4a',fontWeight:600,marginBottom:16}},
+            leadsForOpenHouse(oh.id)+' visitor(s) registered'
+          ),
+          React.createElement('div',{style:{textAlign:'center',marginBottom:12,padding:'12px',background:'#f9f8f6',borderRadius:6}},
+            React.createElement('canvas',{id:'qr-'+oh.id,style:{maxWidth:'100%'},ref:canvas=>{
+              if(canvas&&!canvas._qrGenerated) try{QRCode.toCanvas(canvas,generateQRUrl(oh.id),{width:160,margin:1},()=>{canvas._qrGenerated=true;})}catch(e){}
+            }})
+          ),
+          React.createElement('div',{style:{display:'flex',gap:8}},
+            React.createElement('button',{onClick:()=>printFlyer(oh),style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🖨 Print'),
+            React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh.id));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link')
+          )
+        ))
+      )
+    )
+  );
+}
+
 function App(){
   const [user,setUser]=useState(null);
   const [authReady,setAuthReady]=useState(false);
@@ -10914,6 +11131,7 @@ function App(){
           }
         })
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
+        :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
@@ -10935,6 +11153,10 @@ function App(){
         React.createElement('button',{className:'mob-tab'+(view==='calendar'?' on':''),onClick:()=>{setView('calendar');}},
           React.createElement('span',{className:'mob-tab-icon'},'📅'),
           'Calendar'
+        ),
+        React.createElement('button',{className:'mob-tab'+(view==='open-houses'?' on':''),onClick:()=>{setView('open-houses');}},
+          React.createElement('span',{className:'mob-tab-icon'},'🏠'),
+          'Open House'
         ),
         React.createElement('button',{className:'mob-tab'+(view==='assistant'?' on':''),onClick:()=>{
           setView('assistant');

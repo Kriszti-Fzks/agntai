@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Open House Registration — Agntai</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #f5f5f0 0%, #e8e8e0 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container { max-width: 500px; width: 100%; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      padding: 32px 24px;
+    }
+    .logo {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1a1916;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    .property-section {
+      background: #f9f8f6;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+      border-left: 4px solid #1a6b4a;
+    }
+    .property-section h3 {
+      font-size: 14px;
+      color: #6b6760;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .property-address {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a1916;
+      margin-bottom: 8px;
+    }
+    .property-details {
+      font-size: 13px;
+      color: #6b6760;
+      line-height: 1.6;
+    }
+    .form-section { margin-bottom: 20px; }
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1a1916;
+      margin-bottom: 8px;
+    }
+    input[type="text"],
+    input[type="email"],
+    input[type="tel"] {
+      width: 100%;
+      padding: 11px 12px;
+      border: 1px solid #d5d0c8;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus,
+    input[type="email"]:focus,
+    input[type="tel"]:focus {
+      outline: none;
+      border-color: #1a6b4a;
+      box-shadow: 0 0 0 3px rgba(26, 107, 74, 0.1);
+    }
+    .radio-group {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+    }
+    .radio-option {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+    }
+    input[type="radio"] {
+      margin-right: 8px;
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+    }
+    .radio-option label {
+      margin: 0;
+      font-weight: 400;
+      cursor: pointer;
+    }
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 13px;
+      color: #991b1b;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .error.show { display: block; }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #1a6b4a;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #155339; }
+    button:disabled {
+      background: #b5b0a8;
+      cursor: not-allowed;
+    }
+    .success-message {
+      background: #f0faf5;
+      border: 1px solid #bbf0d8;
+      border-radius: 6px;
+      padding: 16px;
+      text-align: center;
+      display: none;
+    }
+    .success-message.show { display: block; }
+    .success-message h2 {
+      font-size: 20px;
+      color: #1a6b4a;
+      margin-bottom: 8px;
+    }
+    .success-message p {
+      font-size: 14px;
+      color: #1a6b4a;
+    }
+    .loading { text-align: center; padding: 40px 20px; color: #6b6760; }
+    .spinner {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #1a6b4a;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">🏠 Agntai</div>
+
+      <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <p>Loading property details...</p>
+      </div>
+
+      <div id="propertyInfo" style="display: none;">
+        <div class="property-section">
+          <h3>Open House</h3>
+          <div class="property-address" id="address"></div>
+          <div class="property-details" id="details"></div>
+        </div>
+
+        <form id="visitorForm">
+          <div class="error" id="error"></div>
+
+          <div class="form-section">
+            <label for="name">Full Name *</label>
+            <input type="text" id="name" name="name" required>
+          </div>
+
+          <div class="form-section">
+            <label for="phone">Phone Number *</label>
+            <input type="tel" id="phone" name="phone" required>
+          </div>
+
+          <div class="form-section">
+            <label for="email">Email Address *</label>
+            <input type="email" id="email" name="email" required>
+          </div>
+
+          <div class="form-section">
+            <label>Do you already have a real estate agent? *</label>
+            <div class="radio-group">
+              <div class="radio-option">
+                <input type="radio" id="hasAgentYes" name="has_agent" value="yes" required>
+                <label for="hasAgentYes">Yes</label>
+              </div>
+              <div class="radio-option">
+                <input type="radio" id="hasAgentNo" name="has_agent" value="no" required>
+                <label for="hasAgentNo">No</label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" id="submitBtn">Register for Open House</button>
+        </form>
+      </div>
+
+      <div id="successMessage" class="success-message">
+        <h2>✓ Thank You!</h2>
+        <p>Your information has been registered. We'll be in touch shortly.</p>
+      </div>
+
+      <div id="errorMessage" class="error" style="display: none; margin: 0;">
+        <strong>Error:</strong> <span id="errorText"></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    const supabaseUrl = "https://ivjdhgyaqbuqtjbqlnu.supabase.co";
+    const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2amRoZ3lhcWJ1cXRqYnFsbnUiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTcxNjMzNDMyOSwiZXhwIjoxODc0MDEwMzI5fQ.LwAc8a1-Eb-u0sWGWpBK4dXaEiLXQOYvFVU_uHMbj4E";
+    const supabase = supabase.createClient(supabaseUrl, supabaseKey);
+
+    const openHouseId = new URLSearchParams(window.location.search).get("id");
+
+    if (!openHouseId) {
+      document.getElementById("loading").innerHTML = "<p>Invalid link. No open house ID provided.</p>";
+    } else {
+      loadOpenHouse();
+    }
+
+    async function loadOpenHouse() {
+      try {
+        const { data, error } = await supabase
+          .from("open_houses")
+          .select("*")
+          .eq("id", openHouseId)
+          .single();
+
+        if (error || !data) {
+          throw new Error("Open house not found");
+        }
+
+        document.getElementById("address").textContent = data.address;
+        let details = `📅 ${data.date}`;
+        if (data.time) details += ` • ${data.time}`;
+        if (data.bedrooms) details += `\n🛏️ ${data.bedrooms} bed${data.bedrooms !== 1 ? "s" : ""}`;
+        if (data.bathrooms) details += ` • ${data.bathrooms} bath${data.bathrooms !== 1 ? "s" : ""}`;
+        if (data.size_sqft) details += `\n📐 ${data.size_sqft.toLocaleString()} sq ft`;
+        if (data.price) details += `\n💰 ${data.price}`;
+
+        document.getElementById("details").textContent = details;
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("propertyInfo").style.display = "block";
+      } catch (err) {
+        document.getElementById("loading").innerHTML = `<p>Error loading property details: ${err.message}</p>`;
+      }
+    }
+
+    document.getElementById("visitorForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errorDiv = document.getElementById("error");
+      errorDiv.classList.remove("show");
+
+      const name = document.getElementById("name").value.trim();
+      const phone = document.getElementById("phone").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const hasAgent = document.getElementById("hasAgentYes").checked;
+
+      if (!name || !phone || !email) {
+        errorDiv.textContent = "Please fill in all required fields.";
+        errorDiv.classList.add("show");
+        return;
+      }
+
+      document.getElementById("submitBtn").disabled = true;
+      document.getElementById("submitBtn").textContent = "Registering...";
+
+      try {
+        const response = await fetch(
+          "https://ivjdhgyaqbuqtjbqlnu.supabase.co/functions/v1/open-house-submit",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              open_house_id: openHouseId,
+              name,
+              phone,
+              email,
+              has_agent: hasAgent,
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to register. Please try again.");
+        }
+
+        document.getElementById("visitorForm").style.display = "none";
+        document.getElementById("propertyInfo").style.display = "none";
+        document.getElementById("successMessage").classList.add("show");
+      } catch (err) {
+        errorDiv.textContent = err.message;
+        errorDiv.classList.add("show");
+        document.getElementById("submitBtn").disabled = false;
+        document.getElementById("submitBtn").textContent = "Register for Open House";
+      }
+    });
+  </script>
+</body>
+</html>
