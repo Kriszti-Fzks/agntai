@@ -10659,7 +10659,7 @@ function OpenHouseView({user,db,leads,onAddLead}){
   };
 
   const leadsForOpenHouse=(ohId)=>{
-    return leads.filter(l=>l.source==='Open House'&&l.tags&&l.tags.includes('Open House Visitor')).length;
+    return leads.filter(l=>l.source==='Open House'&&l.tags&&l.tags.includes('Open House Visitor')&&l.notes&&l.notes.includes('Open House ID: '+ohId)).length;
   };
 
   const deleteOpenHouse=async(ohId)=>{
@@ -10748,9 +10748,6 @@ function OpenHouseView({user,db,leads,onAddLead}){
             oh.bathrooms?'🚿 '+oh.bathrooms+' bath(s)':'',React.createElement('br'),
             oh.size_sqft?'📐 '+oh.size_sqft.toLocaleString()+' sq ft':'',oh.size_sqft&&oh.price?' • ':'',
             oh.price?'💰 '+oh.price:''
-          ),
-          React.createElement('div',{style:{fontSize:12,color:'#1a6b4a',fontWeight:600,marginBottom:16}},
-            leadsForOpenHouse(oh.id)+' visitor(s) registered'
           ),
           React.createElement('div',{style:{textAlign:'center',marginBottom:12,padding:'12px',background:'#f9f8f6',borderRadius:6}},
             React.createElement('img',{src:'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(generateQRUrl(oh)),style:{maxWidth:'100%',height:'auto'},alt:'QR Code'})
