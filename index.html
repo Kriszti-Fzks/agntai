@@ -10659,7 +10659,19 @@ function OpenHouseView({user,db,leads,onAddLead}){
   };
 
   const leadsForOpenHouse=(ohId)=>{
-    return leads.filter(l=>l.notes&&l.notes.includes('Open House:')&&l.notes.includes(ohId)).length;
+    return leads.filter(l=>l.source==='Open House'&&l.tags&&l.tags.includes('Open House Visitor')).length;
+  };
+
+  const deleteOpenHouse=async(ohId)=>{
+    if(!confirm('Delete this open house?')) return;
+    try{
+      const {error}=await db.from('open_houses').delete().eq('id',ohId).eq('agent_id',user.id);
+      if(error) throw error;
+      setOpenHouses(openHouses.filter(oh=>oh.id!==ohId));
+    }catch(e){
+      console.error('Error deleting open house:',e);
+      setErr('Failed to delete open house');
+    }
   };
 
   if(loading) return React.createElement('div',{className:'vh',style:{display:'flex',alignItems:'center',justifyContent:'center'}},
@@ -10745,7 +10757,8 @@ function OpenHouseView({user,db,leads,onAddLead}){
           ),
           React.createElement('div',{style:{display:'flex',gap:8}},
             React.createElement('button',{onClick:()=>printFlyer(oh),style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🖨 Print'),
-            React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link')
+            React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link'),
+            React.createElement('button',{onClick:()=>deleteOpenHouse(oh.id),style:{flex:1,padding:'10px',background:'#fef2f2',border:'1px solid #fecaca',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer',color:'#991b1b'}},'🗑 Delete')
           )
         ))
       )
