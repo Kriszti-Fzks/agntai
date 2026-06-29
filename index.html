@@ -9260,7 +9260,8 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
       React.createElement('div',{className:'sb-i'+(view==='crm'?' on':''),onClick:()=>sv('crm')},'▦',React.createElement('span',{className:'sb-i-text'},' CRM & Pipeline')),
       React.createElement('div',{className:'sb-i'+(view==='calendar'?' on':''),onClick:()=>sv('calendar')},'📅',React.createElement('span',{className:'sb-i-text'},' Calendar')),
       React.createElement('div',{className:'sb-i'+(view==='open-houses'?' on':''),onClick:()=>sv('open-houses')},'🏠',React.createElement('span',{className:'sb-i-text'},' Open Houses')),
-      React.createElement('div',{className:'sb-i'+(view==='transactions'?' on':''),onClick:()=>sv('transactions')},'📋',React.createElement('span',{className:'sb-i-text'},' Transactions'))
+      React.createElement('div',{className:'sb-i'+(view==='transactions'?' on':''),onClick:()=>sv('transactions')},'📋',React.createElement('span',{className:'sb-i-text'},' Transactions')),
+      React.createElement('div',{className:'sb-i'+(view==='lead-capture-email'?' on':''),onClick:()=>sv('lead-capture-email')},'✉️',React.createElement('span',{className:'sb-i-text'},' Your Lead Capture Email'))
     ),
     React.createElement('div',{className:'sb-ft'},
       React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
@@ -10763,6 +10764,130 @@ function OpenHouseView({user,db,leads,onAddLead}){
   );
 }
 
+function LeadCaptureEmailView({user,db}){
+  const {useState,useEffect}=React;
+  const [inboundEmail,setInboundEmail]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [copied,setCopied]=useState(false);
+
+  useEffect(()=>{
+    if(!user) return;
+    const loadEmail=async()=>{
+      try{
+        const {data,error}=await db.from('agent_inbound_addresses').select('email').eq('agent_id',user.id).single();
+        if(error) throw error;
+        setInboundEmail(data?.email||'');
+      }catch(e){
+        console.error('Error loading inbound email:',e);
+      }finally{
+        setLoading(false);
+      }
+    };
+    loadEmail();
+  },[user,db]);
+
+  const copyToClipboard=()=>{
+    if(inboundEmail){
+      navigator.clipboard.writeText(inboundEmail);
+      setCopied(true);
+      setTimeout(()=>setCopied(false),2000);
+    }
+  };
+
+  return React.createElement('div',{style:{padding:'28px 32px',maxWidth:900}},
+    React.createElement('div',{style:{marginBottom:32}},
+      React.createElement('h1',{style:{fontSize:28,fontWeight:700,color:'#1a1916',marginBottom:8}},'Your Lead Capture Email'),
+      React.createElement('p',{style:{fontSize:14,color:'#6b6760',lineHeight:1.6}},
+        'Use this unique email address to automatically capture leads from incoming messages. Forward emails to this address, and they\'ll instantly appear as new leads in your CRM.'
+      )
+    ),
+
+    // Main email display
+    React.createElement('div',{style:{background:'linear-gradient(135deg, #f0faf5 0%, #e8f5ef 100%)',border:'2px solid #1a6b4a',borderRadius:12,padding:'24px',marginBottom:28,boxShadow:'0 2px 8px rgba(26,107,74,0.08)'}},
+      React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#1a6b4a',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Your Email Address'),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
+        React.createElement('div',{style:{flex:1,minWidth:0}},
+          loading
+            ? React.createElement('div',{style:{color:'#6b6760'}},'Loading...')
+            : React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'#1a1916',wordBreak:'break-all',fontFamily:'monospace'}},inboundEmail)
+        ),
+        React.createElement('button',{
+          onClick:copyToClipboard,
+          style:{
+            padding:'8px 16px',
+            background:copied?'#1a6b4a':'#1a6b4a',
+            color:'white',
+            border:'none',
+            borderRadius:6,
+            fontSize:13,
+            fontWeight:600,
+            cursor:'pointer',
+            whiteSpace:'nowrap',
+            transition:'all 0.2s',
+            flexShrink:0
+          },
+          onMouseEnter:e=>e.target.style.background=copied?'#1a6b4a':'#155339',
+          onMouseLeave:e=>e.target.style.background=copied?'#1a6b4a':'#1a6b4a'
+        },
+          copied?'✓ Copied!':'📋 Copy'
+        )
+      )
+    ),
+
+    // How to use section
+    React.createElement('div',{style:{marginBottom:28}},
+      React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:16}},'How to Use'),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}},
+        // Step 1
+        React.createElement('div',{style:{background:'#f8f7f5',borderRadius:10,padding:16}},
+          React.createElement('div',{style:{fontSize:20,fontWeight:700,color:'#1a6b4a',marginBottom:8}},'1️⃣'),
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916',marginBottom:6}},'Copy Your Email'),
+          React.createElement('div',{style:{fontSize:12,color:'#6b6760',lineHeight:1.5}},'Click the button above to copy your unique lead capture email address.')
+        ),
+        // Step 2
+        React.createElement('div',{style:{background:'#f8f7f5',borderRadius:10,padding:16}},
+          React.createElement('div',{style:{fontSize:20,fontWeight:700,color:'#1a6b4a',marginBottom:8}},'2️⃣'),
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916',marginBottom:6}},'Add to Your Email Signature'),
+          React.createElement('div',{style:{fontSize:12,color:'#6b6760',lineHeight:1.5}},'Share it with clients or add it to your email signature so they know where to send inquiries.')
+        ),
+        // Step 3
+        React.createElement('div',{style:{background:'#f8f7f5',borderRadius:10,padding:16}},
+          React.createElement('div',{style:{fontSize:20,fontWeight:700,color:'#1a6b4a',marginBottom:8}},'3️⃣'),
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916',marginBottom:6}},'Forward Emails'),
+          React.createElement('div',{style:{fontSize:12,color:'#6b6760',lineHeight:1.5}},'Forward any email from potential clients (or their emails) to your lead capture address.')
+        ),
+        // Step 4
+        React.createElement('div',{style:{background:'#f8f7f5',borderRadius:10,padding:16}},
+          React.createElement('div',{style:{fontSize:20,fontWeight:700,color:'#1a6b4a',marginBottom:8}},'4️⃣'),
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916',marginBottom:6}},'Leads Auto-Created'),
+          React.createElement('div',{style:{fontSize:12,color:'#6b6760',lineHeight:1.5}},'AI automatically extracts their details and creates a new lead in your CRM.')
+        )
+      )
+    ),
+
+    // What happens section
+    React.createElement('div',{style:{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:10,padding:18,marginBottom:28}},
+      React.createElement('div',{style:{display:'flex',gap:12}},
+        React.createElement('div',{style:{fontSize:20,flexShrink:0}},'✨'),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#92400e',marginBottom:6}},'What Happens Next'),
+          React.createElement('div',{style:{fontSize:12,color:'#78350f',lineHeight:1.6}},
+            'When an email arrives at your lead capture address, Claude AI reads it and automatically extracts the lead\'s information (name, email, phone, property interest, budget, etc.). The lead is created in your CRM with source "Email-to-Lead" and appears in your pipeline ready for follow-up.'
+          )
+        )
+      )
+    ),
+
+    // Find in profile section
+    React.createElement('div',{style:{background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:10,padding:18}},
+      React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a6b4a',marginBottom:6}},'📍 Also in Your Profile'),
+      React.createElement('div',{style:{fontSize:12,color:'#1a6b4a',lineHeight:1.6}},
+        'You can view and manage this email anytime in your profile settings (Edit Profile → Email Settings).'
+      )
+    )
+  );
+}
+
 function App(){
   const [user,setUser]=useState(null);
   const [authReady,setAuthReady]=useState(false);
@@ -11136,6 +11261,7 @@ function App(){
         })
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
+        :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
