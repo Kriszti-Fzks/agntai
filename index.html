@@ -10764,27 +10764,10 @@ function OpenHouseView({user,db,leads,onAddLead}){
   );
 }
 
-function LeadCaptureEmailView({user,db}){
-  const {useState,useEffect}=React;
-  const [inboundEmail,setInboundEmail]=useState('');
-  const [loading,setLoading]=useState(true);
+function LeadCaptureEmailView({user,db,meta}){
+  const {useState}=React;
   const [copied,setCopied]=useState(false);
-
-  useEffect(()=>{
-    if(!user) return;
-    const loadEmail=async()=>{
-      try{
-        const {data,error}=await db.from('agent_inbound_addresses').select('email').eq('agent_id',user.id).single();
-        if(error) throw error;
-        setInboundEmail(data?.email||'');
-      }catch(e){
-        console.error('Error loading inbound email:',e);
-      }finally{
-        setLoading(false);
-      }
-    };
-    loadEmail();
-  },[user,db]);
+  const inboundEmail=meta?.unique_email||'';
 
   const copyToClipboard=()=>{
     if(inboundEmail){
@@ -10807,9 +10790,7 @@ function LeadCaptureEmailView({user,db}){
       React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#1a6b4a',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Your Email Address'),
       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
         React.createElement('div',{style:{flex:1,minWidth:0}},
-          loading
-            ? React.createElement('div',{style:{color:'#6b6760'}},'Loading...')
-            : React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'#1a1916',wordBreak:'break-all',fontFamily:'monospace'}},inboundEmail)
+          React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'#1a1916',wordBreak:'break-all',fontFamily:'monospace'}},inboundEmail||'(not set)')
         ),
         React.createElement('button',{
           onClick:copyToClipboard,
@@ -11261,7 +11242,7 @@ function App(){
         })
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
-        :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db})
+        :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
