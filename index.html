@@ -11242,7 +11242,7 @@ function App(){
         })
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
-        :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta})
+        :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta:user?.user_metadata||{}})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
