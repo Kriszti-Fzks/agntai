@@ -8484,7 +8484,25 @@ function ProfileModal({user, onClose, onSave}){
             React.createElement('div',{style:{display:'flex',gap:8,marginTop:8}},
               React.createElement('button',{
                 type:'button',
-                onClick:()=>setShowGmailModal(true),
+                onClick:async()=>{
+                  try{
+                    const{data:{session}}=await db.auth.getSession();
+                    if(!session){alert('Please log in first');return;}
+                    const GMAIL_CLIENT_ID='28861750901-8kp4e4fo010rqicf40t7i57ve2u15s3k.apps.googleusercontent.com';
+                    const SUPABASE_URL=window.location.origin.includes('localhost')?'http://localhost:54321':'https://ivjdhgyaqbufqtjbqlnu.supabase.co';
+                    const redirectUri=`${SUPABASE_URL}/functions/v1/gmail-oauth-callback`;
+                    const scope='https://www.googleapis.com/auth/gmail.readonly';
+                    const authUrl=new URL('https://accounts.google.com/o/oauth2/v2/auth');
+                    authUrl.searchParams.append('client_id',GMAIL_CLIENT_ID);
+                    authUrl.searchParams.append('redirect_uri',redirectUri);
+                    authUrl.searchParams.append('scope',scope);
+                    authUrl.searchParams.append('response_type','code');
+                    authUrl.searchParams.append('state',session.user.id);
+                    authUrl.searchParams.append('access_type','offline');
+                    sessionStorage.setItem('gmail_connect_return',window.location.pathname);
+                    window.location.href=authUrl.toString();
+                  }catch(e){alert('Error: '+e.message);}
+                },
                 style:{flex:1,padding:'12px',background:'white',border:'1px solid #e8e6e2',borderRadius:6,cursor:'pointer',fontSize:13,fontFamily:'inherit',fontWeight:500,color:'#1a1916',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}
               },
                 '🔗 Connect Gmail',
