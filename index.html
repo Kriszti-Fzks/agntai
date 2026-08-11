@@ -8405,11 +8405,10 @@ function ProfileModal({user, onClose, onSave}){
   };
 
   return React.createElement('div', null,
-    showGmailModal && React.createElement(GmailIntegrationModal, {
+    showGmailModal ? React.createElement(GmailIntegrationModal, {
       onClose: () => setShowGmailModal(false),
       onConnected: () => setShowGmailModal(false)
-    }),
-    React.createElement('div',{className:'mov',onClick:onClose},
+    }) : React.createElement('div',{className:'mov',onClick:onClose},
       React.createElement('div',{className:'mod',style:{maxWidth:460},onClick:e=>e.stopPropagation()},
         React.createElement('div',{className:'mod-hd'},
           React.createElement('div',{className:'mod-t'},'⚙️ Profile Settings'),
@@ -8485,7 +8484,7 @@ function ProfileModal({user, onClose, onSave}){
             React.createElement('div',{style:{display:'flex',gap:8,marginTop:8}},
               React.createElement('button',{
                 type:'button',
-                onClick:()=>{setShowGmailModal(true);onClose();},
+                onClick:()=>setShowGmailModal(true),
                 style:{flex:1,padding:'12px',background:'white',border:'1px solid #e8e6e2',borderRadius:6,cursor:'pointer',fontSize:13,fontFamily:'inherit',fontWeight:500,color:'#1a1916',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}
               },
                 '🔗 Connect Gmail',
@@ -8503,6 +8502,7 @@ function ProfileModal({user, onClose, onSave}){
           React.createElement('button',{className:'btn-p',onClick:save,disabled:busy},busy?'Saving...':'Save Changes')
         )
       )
+    )
     )
   );
 }
