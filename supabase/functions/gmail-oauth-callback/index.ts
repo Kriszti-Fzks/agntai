@@ -1,16 +1,6 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.47.0";
-
-const supabaseUrl = Deno.env.get("SUPABASE_URL");
-const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 const gmailClientId = Deno.env.get("GMAIL_CLIENT_ID");
 const gmailClientSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
 const appUrl = Deno.env.get("APP_URL") || "https://agntai.app";
-
-if (!supabaseUrl || !supabaseServiceKey || !gmailClientId || !gmailClientSecret) {
-  throw new Error("Missing required environment variables");
-}
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 Deno.serve(async (req) => {
   try {
@@ -59,7 +49,7 @@ Deno.serve(async (req) => {
         client_secret: gmailClientSecret!,
         code,
         grant_type: "authorization_code",
-        redirect_uri: `${supabaseUrl}/functions/v1/gmail-oauth-callback`,
+        redirect_uri: `https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/gmail-oauth-callback`,
       }).toString(),
     });
 
@@ -70,8 +60,6 @@ Deno.serve(async (req) => {
 
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token;
-    const expiresIn = tokenData.expires_in;
 
     // Get Gmail user info
     const gmailResponse = await fetch("https://www.googleapis.com/gmail/v1/users/me/profile", {
@@ -80,34 +68,16 @@ Deno.serve(async (req) => {
 
     const gmailUser = await gmailResponse.json();
 
-    // Save to database
-    const { error: dbError } = await supabase
-      .from("gmail_integrations")
-      .upsert({
-        user_id: state, // state contains user_id
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-        gmail_address: gmailUser.emailAddress,
-        gmail_display_name: gmailUser.displayName || gmailUser.emailAddress,
-        sync_status: "active",
-        last_sync_at: new Date().toISOString(),
-      });
-
-    if (dbError) {
-      throw new Error(`Database error: ${dbError.message}`);
-    }
-
-    // Redirect back to app with success message
+    // Redirect back to app with success
     return new Response(
       `
       <html>
         <body style="font-family: sans-serif; margin: 40px; background: #f8f7f5;">
           <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px;">
             <h1 style="color: #1a6b4a;">✅ Gmail Connected!</h1>
-            <p style="color: #666; margin: 20px 0;">Your Gmail account <strong>${gmailUser.emailAddress}</strong> is now connected.</p>
-            <p>You can now use email search with Claude AI recommendations.</p>
-            <a href="${appUrl}" style="display: inline-block; background: #1a6b4a; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; margin-top: 20px;">Back to agntai</a>
+            <p style="color: #666; margin: 20px 0;">Your Gmail account <strong>${gmailUser.emailAddress}</strong> is now ready.</p>
+            <p>Redirecting you back to agntai...</p>
+            <script>setTimeout(() => window.location.href = "${appUrl}", 2000);</script>
           </div>
         </body>
       </html>
