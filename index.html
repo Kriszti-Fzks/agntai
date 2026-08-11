@@ -1599,7 +1599,11 @@ async function callAnthropic(body) {
     },
     body: JSON.stringify(body),
   });
-  return { res, data: await res.json() };
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'API error');
+  }
+  return { res, data };
 }
 
 async function callClaude(prompt, maxTokens=600) {
@@ -1612,6 +1616,48 @@ async function callClaude(prompt, maxTokens=600) {
     if(data.content && data.content[0]) return data.content[0].text.trim();
     return null;
   } catch(e) { console.error('AI error:', e); return null; }
+}
+
+// ── GMAIL SEARCH ──────────────────────────────────────────────────────────────
+async function callGmailSearch(query, limit = 10) {
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) throw new Error('Not logged in');
+
+    const SUPABASE_URL = window.location.origin.includes('localhost')
+      ? 'http://localhost:54321'
+      : 'https://ivjdhgyaqbufqtjbqlnu.supabase.co';
+
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/gmail-search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': SUPABASE_KEY,
+      },
+      body: JSON.stringify({ query, limit }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Gmail search failed');
+    }
+
+    const result = await response.json();
+    return {
+      success: true,
+      emails: result.emails || [],
+      from: result.from,
+      count: result.count,
+    };
+  } catch (e) {
+    console.error('Gmail search error:', e);
+    return {
+      success: false,
+      error: e.message,
+      emails: [],
+    };
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1835,35 +1881,93 @@ async function _triageBatch(leads, commsByLead, transactions, today, agentName) 
   const cards = leads.map(l => _triageBuildLeadCard(l, commsByLead[l.id]||[], transactions, today)).join('\n\n');
   const system = _triageSystemPrompt(agentName, today);
   const userMsg = `Today's leads to evaluate (${leads.length} leads):\n\n${cards}\n\nReturn the JSON array now. One object per lead, in the same order.`;
+
+  // Define tools for Claude to use
+  const tools = [
+    {
+      name: 'search_user_emails',
+      description: 'Search user\'s Gmail for emails from a specific lead or about a topic. Use queries like "from:marcus@gmail.com" or "subject:property"',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Gmail search query (e.g., "from:lead@email.com" or "subject:listing")',
+          },
+          limit: {
+            type: 'number',
+            description: 'Max emails to return (default 10, max 50)',
+            default: 10,
+          },
+        },
+        required: ['query'],
+      },
+    },
+  ];
+
   try {
-    const { data } = await callAnthropic({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
-      // Prompt caching: the system prompt is identical across all batches in a
-      // single triage run (~2K tokens). Marking it as ephemeral cache means the
-      // first batch primes the cache (paying 1.25× the input price for that
-      // chunk) and subsequent batches get a 90% discount on it for ~5 minutes.
-      // For a 500-lead user that's 5-50 batches in parallel; cache hits across
-      // batches typically save 40-60% of input cost.
-      system: [
-        { type: 'text', text: system, cache_control: { type: 'ephemeral' } }
-      ],
-      messages: [{ role: 'user', content: userMsg }],
-    });
-    if(!data?.content?.[0]?.text) {
-      console.warn('Triage: empty response');
-      return [];
+    let messages = [{ role: 'user', content: userMsg }];
+    let maxIterations = 5; // Prevent infinite loops
+
+    while (maxIterations-- > 0) {
+      const { data } = await callAnthropic({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        tools,
+        system: [
+          { type: 'text', text: system, cache_control: { type: 'ephemeral' } }
+        ],
+        messages,
+      });
+
+      // Check if Claude called a tool
+      const toolUseBlock = data.content?.find(c => c.type === 'tool_use');
+      if (toolUseBlock && toolUseBlock.name === 'search_user_emails') {
+        // Execute the Gmail search
+        const searchResult = await callGmailSearch(
+          toolUseBlock.input.query,
+          toolUseBlock.input.limit || 10
+        );
+
+        // Add Claude's response and tool result to messages
+        messages.push({ role: 'assistant', content: data.content });
+        messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseBlock.id,
+              content: JSON.stringify(searchResult),
+            },
+          ],
+        });
+        // Continue the loop to get Claude's next response
+        continue;
+      }
+
+      // Claude stopped using tools, extract final response
+      const textBlock = data.content?.find(c => c.type === 'text');
+      if (!textBlock?.text) {
+        console.warn('Triage: empty response');
+        return [];
+      }
+
+      let text = textBlock.text.trim();
+      // Strip any accidental code fences
+      text = text.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+      const parsed = JSON.parse(text);
+
+      if (!Array.isArray(parsed)) {
+        console.warn('Triage: response not an array', parsed);
+        return [];
+      }
+
+      return parsed;
     }
-    let text = data.content[0].text.trim();
-    // Strip any accidental code fences
-    text = text.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
-    const parsed = JSON.parse(text);
-    if(!Array.isArray(parsed)) {
-      console.warn('Triage: response not an array', parsed);
-      return [];
-    }
-    return parsed;
-  } catch(e) {
+
+    console.warn('Triage: max iterations reached (infinite tool loop?)');
+    return [];
+  } catch (e) {
     console.error('Triage batch failed:', e);
     return [];
   }
@@ -8281,6 +8385,7 @@ function ProfileModal({user, onClose, onSave}){
   // Email handler preference: 'gmail_web' (open Gmail compose URL) or 'system_mail' (mailto:)
   // Default to gmail_web — works for everyone with a Google account, no system setup required.
   const [emailHandler,setEmailHandler]=useState(meta.email_handler||'gmail_web');
+  const [showGmailModal,setShowGmailModal]=useState(false);
   const [busy,setBusy]=useState(false);
   const [saved,setSaved]=useState(false);
   const [err,setErr]=useState('');
@@ -8299,13 +8404,18 @@ function ProfileModal({user, onClose, onSave}){
     setTimeout(()=>{setSaved(false);onSave(data.user);onClose();},1200);
   };
 
-  return React.createElement('div',{className:'mov',onClick:onClose},
-    React.createElement('div',{className:'mod',style:{maxWidth:460},onClick:e=>e.stopPropagation()},
-      React.createElement('div',{className:'mod-hd'},
-        React.createElement('div',{className:'mod-t'},'⚙️ Profile Settings'),
-        React.createElement('button',{className:'mod-x',onClick:onClose},'×')
-      ),
-      React.createElement('div',{className:'mod-b'},
+  return React.createElement('div', null,
+    showGmailModal && React.createElement(GmailIntegrationModal, {
+      onClose: () => setShowGmailModal(false),
+      onConnected: () => setShowGmailModal(false)
+    }),
+    React.createElement('div',{className:'mov',onClick:onClose},
+      React.createElement('div',{className:'mod',style:{maxWidth:460},onClick:e=>e.stopPropagation()},
+        React.createElement('div',{className:'mod-hd'},
+          React.createElement('div',{className:'mod-t'},'⚙️ Profile Settings'),
+          React.createElement('button',{className:'mod-x',onClick:onClose},'×')
+        ),
+        React.createElement('div',{className:'mod-b'},
         React.createElement('div',{style:{fontSize:12,color:'#a09d98',marginBottom:4,padding:'8px 10px',background:'#f8f7f5',borderRadius:6,border:'1px solid #e8e6e2'}},'Changes apply immediately across your account — no need to create a new account when you change brokerages.'),
         React.createElement('div',{className:'fr'},
           React.createElement('div',{className:'fg fw'},
@@ -8368,16 +8478,172 @@ function ProfileModal({user, onClose, onSave}){
             )
           )
         ),
+        // Gmail integration section
+        React.createElement('div',{className:'fr'},
+          React.createElement('div',{className:'fg fw'},
+            React.createElement('label',{className:'fl'},'AI Email Context'),
+            React.createElement('div',{style:{display:'flex',gap:8,marginTop:8}},
+              React.createElement('button',{
+                type:'button',
+                onClick:()=>setShowGmailModal(true),
+                style:{flex:1,padding:'12px',background:'white',border:'1px solid #e8e6e2',borderRadius:6,cursor:'pointer',fontSize:13,fontFamily:'inherit',fontWeight:500,color:'#1a1916',display:'flex',alignItems:'center',gap:8,justifyContent:'center'}
+              },
+                '🔗 Connect Gmail',
+                React.createElement('span',{style:{fontSize:11,color:'#a09d98'}},'for AI context')
+              )
+            ),
+            React.createElement('div',{style:{fontSize:11,color:'#6b6760',marginTop:6,lineHeight:1.5}},'When you connect Gmail, Claude AI can read your emails to give better recommendations about lead follow-ups.')
+          )
+        ),
         err&&React.createElement('div',{style:{padding:'8px 10px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:12,color:'#dc2626'}},err),
         saved&&React.createElement('div',{style:{padding:'8px 10px',background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:6,fontSize:12,color:'#1a6b4a',fontWeight:600}},'✓ Profile saved!')
       ),
-      React.createElement('div',{className:'mod-ft'},
-        React.createElement('button',{className:'bc',onClick:onClose},'Cancel'),
-        React.createElement('button',{className:'btn-p',onClick:save,disabled:busy},busy?'Saving...':'Save Changes')
+        React.createElement('div',{className:'mod-ft'},
+          React.createElement('button',{className:'bc',onClick:onClose},'Cancel'),
+          React.createElement('button',{className:'btn-p',onClick:save,disabled:busy},busy?'Saving...':'Save Changes')
+        )
       )
     )
   );
 }
+
+// ── GMAIL INTEGRATION SECTION ──────────────────────────────────────────────────
+function GmailIntegrationModal({onClose, onConnected}) {
+  const {useState:us, useEffect:ue} = React;
+  const [status, setStatus] = us('loading'); // 'loading', 'connected', 'disconnected', 'connecting'
+  const [gmailAddress, setGmailAddress] = us('');
+  const [error, setError] = us('');
+
+  // Check if Gmail is already connected
+  ue(async () => {
+    try {
+      const { data: { session } } = await db.auth.getSession();
+      if (!session) {
+        setStatus('disconnected');
+        return;
+      }
+
+      const { data, error: err } = await db
+        .from('gmail_integrations')
+        .select('gmail_address, sync_status')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (err || !data) {
+        setStatus('disconnected');
+        return;
+      }
+
+      setGmailAddress(data.gmail_address);
+      setStatus(data.sync_status === 'active' ? 'connected' : 'disconnected');
+    } catch (e) {
+      console.error('Gmail status check:', e);
+      setStatus('disconnected');
+    }
+  }, []);
+
+  const handleConnect = async () => {
+    try {
+      const { data: { session } } = await db.auth.getSession();
+      if (!session) {
+        setError('Please log in first');
+        return;
+      }
+
+      setStatus('connecting');
+      setError('');
+
+      // Replace with your actual Gmail Client ID
+      const GMAIL_CLIENT_ID = 'YOUR_GMAIL_CLIENT_ID';
+      const SUPABASE_URL = window.location.origin.includes('localhost')
+        ? 'http://localhost:54321'
+        : 'https://ivjdhgyaqbufqtjbqlnu.supabase.co';
+
+      const redirectUri = `${SUPABASE_URL}/functions/v1/gmail-oauth-callback`;
+      const scope = 'https://www.googleapis.com/auth/gmail.readonly';
+
+      const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authUrl.searchParams.append('client_id', GMAIL_CLIENT_ID);
+      authUrl.searchParams.append('redirect_uri', redirectUri);
+      authUrl.searchParams.append('scope', scope);
+      authUrl.searchParams.append('response_type', 'code');
+      authUrl.searchParams.append('state', session.user.id);
+      authUrl.searchParams.append('access_type', 'offline');
+
+      // Store original location to redirect back
+      sessionStorage.setItem('gmail_connect_return', window.location.pathname);
+
+      window.location.href = authUrl.toString();
+    } catch (e) {
+      setError(e.message);
+      setStatus('disconnected');
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!confirm('Are you sure? Claude won\'t be able to read your emails after this.')) return;
+
+    try {
+      const { data: { session } } = await db.auth.getSession();
+      if (!session) return;
+
+      await db
+        .from('gmail_integrations')
+        .delete()
+        .eq('user_id', session.user.id);
+
+      setStatus('disconnected');
+      setGmailAddress('');
+      alert('Gmail disconnected successfully');
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  return React.createElement('div', { className: 'mov', onClick: onClose },
+    React.createElement('div', { className: 'mod', style: { maxWidth: 500 }, onClick: e => e.stopPropagation() },
+      React.createElement('div', { className: 'mod-hd' },
+        React.createElement('div', { className: 'mod-t' }, '📧 Gmail Integration'),
+        React.createElement('button', { className: 'mod-x', onClick: onClose }, '×')
+      ),
+      React.createElement('div', { className: 'mod-b' },
+        React.createElement('div', { style: { fontSize: 13, color: '#6b6760', marginBottom: 16, lineHeight: 1.6 } },
+          'Connect your Gmail account so Claude can read your emails when giving recommendations. This helps with:'
+        ),
+        React.createElement('ul', { style: { fontSize: 12, color: '#6b6760', margin: '0 0 20px 20px', lineHeight: 1.8 } },
+          React.createElement('li', null, 'Understanding lead communication history'),
+          React.createElement('li', null, 'Detecting unanswered questions'),
+          React.createElement('li', null, 'Finding email context for recommendations')
+        ),
+
+        status === 'loading' && React.createElement('div', { style: { textAlign: 'center', padding: '30px', color: '#a09d98' } }, '⏳ Checking Gmail status...'),
+
+        status === 'disconnected' && React.createElement('div', null,
+          React.createElement('div', { style: { padding: '12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, marginBottom: 16, fontSize: 12, color: '#92400e' } },
+            '🔒 Your Gmail account info is encrypted at rest. agntai only accesses read-only emails.'
+          ),
+          error && React.createElement('div', { style: { padding: '10px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, marginBottom: 12, fontSize: 12, color: '#dc2626' } }, error)
+        ),
+
+        status === 'connected' && React.createElement('div', null,
+          React.createElement('div', { style: { padding: '12px', background: '#f0faf5', border: '1px solid #bbf0d8', borderRadius: 6, marginBottom: 16, fontSize: 12, color: '#1a6b4a' } },
+            React.createElement('div', { style: { fontWeight: 600, marginBottom: 4 } }, '✓ Gmail Connected'),
+            React.createElement('div', null, gmailAddress)
+          )
+        ),
+
+        status === 'connecting' && React.createElement('div', { style: { textAlign: 'center', padding: '30px', color: '#a09d98' } }, '🔄 Redirecting to Gmail...')
+      ),
+
+      React.createElement('div', { className: 'mod-ft' },
+        React.createElement('button', { className: 'bc', onClick: onClose }, 'Close'),
+        status === 'disconnected' && React.createElement('button', { className: 'btn-p', onClick: handleConnect }, 'Connect Gmail'),
+        status === 'connected' && React.createElement('button', { className: 'bc', onClick: handleDisconnect, style: { color: '#dc2626' } }, 'Disconnect')
+      )
+    )
+  );
+}
+
 // ── CONTRACT EXTRACTION ───────────────────────────────────────────────────────
 async function extractContractFields(base64PDF, contractType) {
   const typeInstructions = contractType === 'lease'
