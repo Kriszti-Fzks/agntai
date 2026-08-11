@@ -8515,31 +8515,34 @@ function GmailIntegrationModal({onClose, onConnected}) {
   const [error, setError] = us('');
 
   // Check if Gmail is already connected
-  ue(async () => {
-    try {
-      const { data: { session } } = await db.auth.getSession();
-      if (!session) {
+  ue(() => {
+    const checkGmailStatus = async () => {
+      try {
+        const { data: { session } } = await db.auth.getSession();
+        if (!session) {
+          setStatus('disconnected');
+          return;
+        }
+
+        const { data, error: err } = await db
+          .from('gmail_integrations')
+          .select('gmail_address, sync_status')
+          .eq('user_id', session.user.id)
+          .single();
+
+        if (err || !data) {
+          setStatus('disconnected');
+          return;
+        }
+
+        setGmailAddress(data.gmail_address);
+        setStatus(data.sync_status === 'active' ? 'connected' : 'disconnected');
+      } catch (e) {
+        console.error('Gmail status check:', e);
         setStatus('disconnected');
-        return;
       }
-
-      const { data, error: err } = await db
-        .from('gmail_integrations')
-        .select('gmail_address, sync_status')
-        .eq('user_id', session.user.id)
-        .single();
-
-      if (err || !data) {
-        setStatus('disconnected');
-        return;
-      }
-
-      setGmailAddress(data.gmail_address);
-      setStatus(data.sync_status === 'active' ? 'connected' : 'disconnected');
-    } catch (e) {
-      console.error('Gmail status check:', e);
-      setStatus('disconnected');
-    }
+    };
+    checkGmailStatus();
   }, []);
 
   const handleConnect = async () => {
