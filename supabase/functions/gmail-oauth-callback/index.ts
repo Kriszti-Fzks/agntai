@@ -31,6 +31,13 @@ Deno.serve(async (req) => {
 
   try {
     // Exchange code for tokens
+    const redirectUri = `${supabaseUrl}/functions/v1/gmail-oauth-callback`;
+    console.log("Token exchange attempt:", {
+      client_id: gmailClientId,
+      redirect_uri: redirectUri,
+      code: code?.substring(0, 20) + "...",
+    });
+
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -39,12 +46,17 @@ Deno.serve(async (req) => {
         client_secret: gmailClientSecret!,
         code,
         grant_type: "authorization_code",
-        redirect_uri: `${supabaseUrl}/functions/v1/gmail-oauth-callback`,
+        redirect_uri: redirectUri,
       }).toString(),
     });
 
     if (!tokenResponse.ok) {
-      throw new Error("Token exchange failed");
+      const errorText = await tokenResponse.text();
+      console.error("Token exchange failed:", {
+        status: tokenResponse.status,
+        error: errorText,
+      });
+      throw new Error(`Token exchange failed: ${errorText}`);
     }
 
     const tokenData = await tokenResponse.json();
