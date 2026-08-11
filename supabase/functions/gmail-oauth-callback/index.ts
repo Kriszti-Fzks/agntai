@@ -40,53 +40,48 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Exchange code for tokens
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: gmailClientId!,
-        client_secret: gmailClientSecret!,
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: `https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/gmail-oauth-callback`,
-      }).toString(),
-    });
+    // Exchange code for tokens with Google
+    try {
+      const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: gmailClientId!,
+          client_secret: gmailClientSecret!,
+          code,
+          grant_type: "authorization_code",
+          redirect_uri: `https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/gmail-oauth-callback`,
+        }).toString(),
+      });
 
-    if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
-      throw new Error(`Token exchange failed: ${error}`);
-    }
-
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-
-    // Get Gmail user info
-    const gmailResponse = await fetch("https://www.googleapis.com/gmail/v1/users/me/profile", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    const gmailUser = await gmailResponse.json();
-
-    // Redirect back to app with success
-    return new Response(
-      `
-      <html>
-        <body style="font-family: sans-serif; margin: 40px; background: #f8f7f5;">
-          <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px;">
-            <h1 style="color: #1a6b4a;">✅ Gmail Connected!</h1>
-            <p style="color: #666; margin: 20px 0;">Your Gmail account <strong>${gmailUser.emailAddress}</strong> is now ready.</p>
-            <p>Redirecting you back to agntai...</p>
-            <script>setTimeout(() => window.location.href = "${appUrl}", 2000);</script>
-          </div>
-        </body>
-      </html>
-      `,
-      {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
+      if (!tokenResponse.ok) {
+        const error = await tokenResponse.text();
+        throw new Error(`Token exchange failed: ${error}`);
       }
-    );
+
+      // Redirect back to app with success
+      return new Response(
+        `
+        <html>
+          <body style="font-family: sans-serif; margin: 40px; background: #f8f7f5;">
+            <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px;">
+              <h1 style="color: #1a6b4a;">✅ Gmail Connected!</h1>
+              <p style="color: #666; margin: 20px 0;">Your Gmail account is now connected to agntai.</p>
+              <p>Redirecting you back...</p>
+              <script>setTimeout(() => window.location.href = "${appUrl}", 2000);</script>
+            </div>
+          </body>
+        </html>
+        `,
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }
+      );
+    } catch (tokenError) {
+      console.error('Token error:', tokenError);
+      throw tokenError;
+    }
   } catch (error) {
     console.error("OAuth callback error:", error);
     return new Response(
