@@ -8561,10 +8561,23 @@ function GmailIntegrationModal({onClose, onConnected}) {
       authUrl.searchParams.append('state', session.user.id);
       authUrl.searchParams.append('access_type', 'offline');
 
-      // Store original location to redirect back
-      sessionStorage.setItem('gmail_connect_return', window.location.pathname);
+      // Open OAuth in a new window to avoid sandbox restrictions
+      const oauthWindow = window.open(authUrl.toString(), 'gmail_oauth', 'width=500,height=600');
 
-      window.location.href = authUrl.toString();
+      if (!oauthWindow) {
+        setError('Pop-up blocked. Please allow pop-ups for agntai.app');
+        setStatus('disconnected');
+        return;
+      }
+
+      // Poll for completion
+      const checkInterval = setInterval(() => {
+        if (oauthWindow.closed) {
+          clearInterval(checkInterval);
+          // Check if connection succeeded
+          setTimeout(() => checkGmailStatus(), 500);
+        }
+      }, 500);
     } catch (e) {
       setError(e.message);
       setStatus('disconnected');

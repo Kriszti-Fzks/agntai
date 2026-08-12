@@ -52,7 +52,8 @@ Deno.serve(async (req: Request) => {
     console.log("Found open house:", openHouse.id, "with agent_id:", openHouse.agent_id);
 
     // Build lead notes from open house details
-    const leadNotes = `Open House: ${openHouse.address}
+    const leadNotes = `Open House ID: ${open_house_id}
+Address: ${openHouse.address}
 Date: ${openHouse.date}${openHouse.time ? " " + openHouse.time : ""}
 Bedrooms: ${openHouse.bedrooms || "Not specified"}
 Bathrooms: ${openHouse.bathrooms || "Not specified"}
