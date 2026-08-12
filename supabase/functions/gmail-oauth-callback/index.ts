@@ -83,9 +83,11 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error("Error:", error);
-    return new Response(
-      `<html><body style="font-family: sans-serif; margin: 40px; background: #f8f7f5;"><div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px;"><h1 style="color: #dc2626;">Error</h1><p style="color: #666;">Failed to save Gmail connection. Please try again.</p><a href="${appUrl}" style="display: inline-block; background: #1a6b4a; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; margin-top: 20px;">Back to agntai</a></div></body></html>`,
-      { status: 500, headers: { "Content-Type": "text/html" } }
-    );
+    return new Response(null, {
+      status: 302,
+      headers: {
+        "Location": `${appUrl}?gmail_error=${encodeURIComponent(error.message || "Unknown error")}`,
+      },
+    });
   }
 });
