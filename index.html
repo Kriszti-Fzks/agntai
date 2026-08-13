@@ -1619,67 +1619,6 @@ async function callClaude(prompt, maxTokens=600) {
 }
 
 // ── GMAIL FUNCTIONS ───────────────────────────────────────────────────────────
-async function startGmailOAuth() {
-  try {
-    const { data: { session } } = await db.auth.getSession();
-    if (!session) { alert('Please log in first'); return; }
-    const clientId = '28861750901-8kp4e4fo010rqicf40t7i57ve2u15s3k.apps.googleusercontent.com';
-    const baseUrl = window.location.origin.includes('localhost') ? 'http://localhost:54321' : 'https://ivjdhgyaqbufqtjbqlnu.supabase.co';
-    const redirect = baseUrl + '/functions/v1/gmail-oauth-callback';
-    const url = 'https://accounts.google.com/o/oauth2/v2/auth?' +
-      'client_id=' + encodeURIComponent(clientId) +
-      '&redirect_uri=' + encodeURIComponent(redirect) +
-      '&scope=' + encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly') +
-      '&response_type=code' +
-      '&state=' + encodeURIComponent(session.user.id) +
-      '&access_type=offline';
-    sessionStorage.setItem('gmail_connect_return', window.location.pathname);
-    window.location.href = url;
-  } catch (e) {
-    alert('Error: ' + e.message);
-  }
-}
-
-async function callGmailSearch(query, limit = 10) {
-  try {
-    const { data: { session } } = await db.auth.getSession();
-    if (!session) throw new Error('Not logged in');
-
-    const SUPABASE_URL = window.location.origin.includes('localhost')
-      ? 'http://localhost:54321'
-      : 'https://ivjdhgyaqbufqtjbqlnu.supabase.co';
-
-    const response = await fetch(`${SUPABASE_URL}/functions/v1/gmail-search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-        'apikey': SUPABASE_KEY,
-      },
-      body: JSON.stringify({ query, limit }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Gmail search failed');
-    }
-
-    const result = await response.json();
-    return {
-      success: true,
-      emails: result.emails || [],
-      from: result.from,
-      count: result.count,
-    };
-  } catch (e) {
-    console.error('Gmail search error:', e);
-    return {
-      success: false,
-      error: e.message,
-      emails: [],
-    };
-  }
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // DAILY TRIAGE — the smart AI agent that reviews each lead and decides what
@@ -1904,27 +1843,7 @@ async function _triageBatch(leads, commsByLead, transactions, today, agentName) 
   const userMsg = `Today's leads to evaluate (${leads.length} leads):\n\n${cards}\n\nReturn the JSON array now. One object per lead, in the same order.`;
 
   // Define tools for Claude to use
-  const tools = [
-    {
-      name: 'search_user_emails',
-      description: 'Search user\'s Gmail for emails from a specific lead or about a topic. Use queries like "from:marcus@gmail.com" or "subject:property"',
-      input_schema: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Gmail search query (e.g., "from:lead@email.com" or "subject:listing")',
-          },
-          limit: {
-            type: 'number',
-            description: 'Max emails to return (default 10, max 50)',
-            default: 10,
-          },
-        },
-        required: ['query'],
-      },
-    },
-  ];
+  const tools = [];
 
   try {
     let messages = [{ role: 'user', content: userMsg }];
@@ -1943,29 +1862,6 @@ async function _triageBatch(leads, commsByLead, transactions, today, agentName) 
 
       // Check if Claude called a tool
       const toolUseBlock = data.content?.find(c => c.type === 'tool_use');
-      if (toolUseBlock && toolUseBlock.name === 'search_user_emails') {
-        // Execute the Gmail search
-        const searchResult = await callGmailSearch(
-          toolUseBlock.input.query,
-          toolUseBlock.input.limit || 10
-        );
-
-        // Add Claude's response and tool result to messages
-        messages.push({ role: 'assistant', content: data.content });
-        messages.push({
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: toolUseBlock.id,
-              content: JSON.stringify(searchResult),
-            },
-          ],
-        });
-        // Continue the loop to get Claude's next response
-        continue;
-      }
-
       // Claude stopped using tools, extract final response
       const textBlock = data.content?.find(c => c.type === 'text');
       if (!textBlock?.text) {
