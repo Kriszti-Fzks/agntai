@@ -6,6 +6,12 @@ const gmailClientId = Deno.env.get("GMAIL_CLIENT_ID");
 const gmailClientSecret = Deno.env.get("GMAIL_CLIENT_SECRET");
 const appUrl = Deno.env.get("APP_URL") || "https://agntai.app";
 
+console.log("=== ENV VAR CHECK ===");
+console.log("SUPABASE_URL:", supabaseUrl ? "LOADED" : "MISSING");
+console.log("GMAIL_CLIENT_ID:", gmailClientId ? "LOADED" : "MISSING");
+console.log("GMAIL_CLIENT_SECRET:", gmailClientSecret ? "LOADED" : "MISSING");
+console.log("=== END CHECK ===")
+
 const supabase = createClient(supabaseUrl || "", supabaseServiceKey || "");
 
 Deno.serve(async (req) => {
