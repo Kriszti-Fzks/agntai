@@ -53,21 +53,20 @@ Deno.serve(async (req) => {
     console.log("Auth code (first 20 chars):", code?.substring(0, 20));
     console.log("===========================");
 
-    const body = new URLSearchParams({
+    const params = new URLSearchParams({
       client_id: gmailClientId!,
       client_secret: gmailClientSecret!,
       code,
       grant_type: "authorization_code",
       redirect_uri: redirectUri,
-    }).toString();
-
-    console.log("Request body length:", body.length);
-    console.log("Request body (first 100 chars):", body.substring(0, 100));
+    });
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
+      headers: {
+        "Accept": "application/json",
+      },
+      body: params,
     });
 
     const responseText = await tokenResponse.text();
