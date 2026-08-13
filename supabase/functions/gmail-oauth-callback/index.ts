@@ -34,31 +34,42 @@ Deno.serve(async (req) => {
   try {
     // Exchange code for tokens
     const redirectUri = `${supabaseUrl}/functions/v1/gmail-oauth-callback`;
-    console.log("Token exchange attempt:", {
-      client_id: gmailClientId,
+
+    // Log all parameters being sent
+    console.log("=== TOKEN EXCHANGE DEBUG ===");
+    console.log("SUPABASE_URL:", supabaseUrl);
+    console.log("GMAIL_CLIENT_ID length:", gmailClientId?.length);
+    console.log("GMAIL_CLIENT_ID first 20 chars:", gmailClientId?.substring(0, 20));
+    console.log("GMAIL_CLIENT_SECRET length:", gmailClientSecret?.length);
+    console.log("GMAIL_CLIENT_SECRET first 10 chars:", gmailClientSecret?.substring(0, 10));
+    console.log("GMAIL_CLIENT_SECRET last 10 chars:", gmailClientSecret?.substring(gmailClientSecret.length - 10));
+    console.log("Redirect URI:", redirectUri);
+    console.log("Auth code (first 20 chars):", code?.substring(0, 20));
+    console.log("===========================");
+
+    const body = new URLSearchParams({
+      client_id: gmailClientId!,
+      client_secret: gmailClientSecret!,
+      code,
+      grant_type: "authorization_code",
       redirect_uri: redirectUri,
-      code: code?.substring(0, 20) + "...",
-    });
+    }).toString();
+
+    console.log("Request body length:", body.length);
+    console.log("Request body (first 100 chars):", body.substring(0, 100));
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: gmailClientId!,
-        client_secret: gmailClientSecret!,
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: redirectUri,
-      }).toString(),
+      body,
     });
 
+    const responseText = await tokenResponse.text();
+    console.log("Google response status:", tokenResponse.status);
+    console.log("Google response:", responseText);
+
     if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error("Token exchange failed:", {
-        status: tokenResponse.status,
-        error: errorText,
-      });
-      throw new Error(`Token exchange failed: ${errorText}`);
+      throw new Error(`Token exchange failed: ${responseText}`);
     }
 
     const tokenData = await tokenResponse.json();
