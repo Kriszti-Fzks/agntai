@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Data Processing Agreement — Agntai</title>
+<meta name="description" content="How Agntai protects your data and processes real estate information securely." />
+<meta name="theme-color" content="#1a6b4a" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&display=swap" rel="stylesheet" />
+
+<style>
+:root {
+  --bg:#f5f2ec;
+  --bg-cream:#ede8dd;
+  --ink:#1a1916;
+  --ink-soft:#3d3a35;
+  --ink-muted:#6b6760;
+  --ink-faint:#a09d98;
+  --green:#1a6b4a;
+  --green-deep:#134a34;
+  --green-soft:#d8e5df;
+  --accent:#c8583b;
+  --line:#d5d3cd;
+  --line-soft:#e8e6e2;
+  --white:#ffffff;
+}
+
+* { box-sizing:border-box; margin:0; padding:0; }
+html { scroll-behavior:smooth; }
+body {
+  font-family:'DM Sans', system-ui, sans-serif;
+  background:var(--bg);
+  color:var(--ink);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+.container { max-width:860px; margin:0 auto; padding:0 28px; }
+a { color:var(--green); text-decoration:none; transition:color 0.2s; }
+a:hover { color:var(--green-deep); }
+
+/* ─── Nav ─── */
+.nav {
+  position:sticky; top:0; z-index:100;
+  backdrop-filter:blur(10px);
+  background:rgba(245,242,236,0.82);
+  border-bottom:1px solid var(--line-soft);
+}
+.nav-inner {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 28px;
+  max-width:860px; margin:0 auto;
+}
+.logo {
+  font-family:'Fraunces', serif;
+  font-weight:600;
+  font-size:22px;
+  letter-spacing:-0.02em;
+  color:var(--ink);
+  display:flex; align-items:center; gap:10px;
+  text-decoration:none;
+}
+.logo-mark {
+  width:28px; height:28px; border-radius:50%;
+  background:var(--green);
+  display:flex; align-items:center; justify-content:center;
+  color:white; font-weight:700; font-size:12px;
+}
+.nav-cta {
+  padding:9px 18px;
+  background:var(--ink);
+  color:var(--bg)!important;
+  border-radius:999px;
+  font-weight:500;
+  font-size:13.5px;
+  transition:background 0.2s;
+}
+.nav-cta:hover { background:var(--green)!important; }
+
+/* ─── Content ─── */
+.content {
+  padding:60px 0 80px;
+}
+
+.content h1 {
+  font-family:'Fraunces', serif;
+  font-weight:500;
+  font-size:clamp(32px, 5vw, 44px);
+  line-height:1.1;
+  letter-spacing:-0.025em;
+  margin-bottom:8px;
+}
+
+.content-meta {
+  font-size:14px;
+  color:var(--ink-muted);
+  margin-bottom:40px;
+  padding-bottom:20px;
+  border-bottom:1px solid var(--line-soft);
+}
+
+.content h2 {
+  font-family:'Fraunces', serif;
+  font-weight:500;
+  font-size:22px;
+  line-height:1.15;
+  letter-spacing:-0.01em;
+  margin:40px 0 16px;
+  color:var(--ink);
+}
+
+.content h3 {
+  font-weight:600;
+  font-size:16px;
+  margin:24px 0 12px;
+  color:var(--ink-soft);
+}
+
+.content p {
+  margin-bottom:14px;
+  line-height:1.65;
+  color:var(--ink-soft);
+}
+
+.content ul, .content ol {
+  margin:14px 0 14px 24px;
+  line-height:1.7;
+}
+
+.content li {
+  margin-bottom:10px;
+  color:var(--ink-soft);
+}
+
+.content strong { color:var(--ink); font-weight:600; }
+
+.content table {
+  width:100%;
+  margin:24px 0;
+  border-collapse:collapse;
+  font-size:14px;
+}
+
+.content table th {
+  background:var(--bg-cream);
+  padding:12px 14px;
+  text-align:left;
+  font-weight:600;
+  color:var(--ink);
+  border-bottom:1px solid var(--line);
+}
+
+.content table td {
+  padding:12px 14px;
+  border-bottom:1px solid var(--line-soft);
+  color:var(--ink-soft);
+}
+
+.content table tr:last-child td {
+  border-bottom:none;
+}
+
+.highlight-box {
+  background:var(--green-soft);
+  border-left:4px solid var(--green);
+  padding:18px 16px;
+  border-radius:8px;
+  margin:20px 0;
+}
+
+.highlight-box p {
+  margin:0;
+  color:var(--green-deep);
+  font-weight:500;
+}
+
+/* ─── Footer ─── */
+.footer {
+  padding:40px 0;
+  border-top:1px solid var(--line-soft);
+  font-size:13px;
+  color:var(--ink-muted);
+  background:var(--bg-cream);
+}
+.footer-inner {
+  display:flex; justify-content:space-between; align-items:center;
+  flex-wrap:wrap; gap:16px;
+  max-width:860px; margin:0 auto; padding:0 28px;
+}
+.footer a { transition:color 0.2s; }
+.footer a:hover { color:var(--green); }
+
+@media (max-width:640px){
+  .content { padding:40px 0 60px; }
+  .content h2 { margin:32px 0 14px; font-size:20px; }
+  .footer-inner { flex-direction:column; align-items:flex-start; gap:12px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="/" class="logo">
+      <span class="logo-mark">A</span>
+      <span>Agntai</span>
+    </a>
+    <a href="https://agntai.app" class="nav-cta">Sign in</a>
+  </div>
+</nav>
+
+<!-- Content -->
+<section class="content">
+  <div class="container">
+    <h1>Data Processing Agreement</h1>
+    <div class="content-meta">Effective: August 2026 — Pilot Phase</div>
+
+    <h2>Overview</h2>
+    <p>
+      This Data Processing Agreement ("DPA") describes how agntai.app collects, processes, stores, and protects your real estate data when you use our service.
+    </p>
+    <ul>
+      <li><strong>Data Controller (You)</strong>: The real estate agent or broker using agntai.app</li>
+      <li><strong>Data Processor (Us)</strong>: agntai.app and its operators</li>
+      <li><strong>Relationship</strong>: You own your data. We process it on your behalf to provide the service.</li>
+    </ul>
+
+    <h2>What Data We Collect</h2>
+    <p>When you use agntai.app, we collect and store:</p>
+    <ul>
+      <li><strong>Contact Information</strong>: Lead names, phone numbers, email addresses</li>
+      <li><strong>Transaction Data</strong>: Property addresses, prices, dates, status</li>
+      <li><strong>Communications</strong>: Emails, notes, call summaries</li>
+      <li><strong>Account Information</strong>: Your login, preferences, usage history</li>
+      <li><strong>AI Interactions</strong>: Questions you ask the AI assistant and its responses</li>
+    </ul>
+
+    <h2>How We Use Your Data</h2>
+    <p>We use your data <strong>only</strong> to:</p>
+    <ul>
+      <li>Provide the agntai.app service to you</li>
+      <li>Improve the service through usage analytics (anonymized, no personal details shared)</li>
+      <li>Fix bugs and provide customer support</li>
+      <li>Comply with legal requirements</li>
+    </ul>
+
+    <div class="highlight-box">
+      <p>We never sell your data to third parties, share your leads with other users, use your data to train AI models, or delete your data without permission.</p>
+    </div>
+
+    <h2>How We Protect Your Data</h2>
+    <h3>Security Measures</h3>
+    <ul>
+      <li><strong>Encryption</strong>: Data transmitted via HTTPS (SSL/TLS); sensitive data encrypted at rest</li>
+      <li><strong>Database Security</strong>: Supabase PostgreSQL with Row-Level Security (RLS) — only you can access your own data</li>
+      <li><strong>Access Control</strong>: Only our team can access systems for support; no access to user data without permission</li>
+      <li><strong>Regular Backups</strong>: Automatic daily backups to prevent data loss</li>
+    </ul>
+
+    <p>
+      <strong>What This Means</strong>: Your leads and contacts are locked down so that other users cannot see your data, our team cannot accidentally see your data, and data is protected against unauthorized access.
+    </p>
+
+    <h2>Data Retention & Deletion</h2>
+    <h3>During Your Account</h3>
+    <ul>
+      <li>Your data is stored as long as your account is active</li>
+      <li>You can request data deletion or export at any time</li>
+    </ul>
+
+    <h3>After You Cancel</h3>
+    <ul>
+      <li>You have 30 days to export your data</li>
+      <li>After 30 days, all data is permanently deleted from our systems</li>
+      <li>Backup copies are deleted within 90 days</li>
+    </ul>
+
+    <h2>Your Rights</h2>
+    <p><strong>You have the right to:</strong></p>
+    <ul>
+      <li>Access all your data (we can export it in CSV format)</li>
+      <li>Correct inaccurate data</li>
+      <li>Delete your data (within 30 days of account cancellation)</li>
+      <li>Understand how we process it (this DPA)</li>
+      <li>Object to processing (we'll stop processing and delete it)</li>
+    </ul>
+
+    <p>
+      <strong>To exercise these rights:</strong> Email <a href="mailto:kzurfazekas@gmail.com">kzurfazekas@gmail.com</a> with your request.
+    </p>
+
+    <h2>International Compliance</h2>
+    <h3>GDPR (European Users)</h3>
+    <ul>
+      <li>If you or your contacts are in the EU, this DPA meets GDPR requirements</li>
+      <li>We do not transfer EU data outside the EU</li>
+      <li>You are responsible for legal compliance with your own leads</li>
+    </ul>
+
+    <h3>CCPA & State Privacy Laws</h3>
+    <ul>
+      <li>We comply with California and other state privacy requirements</li>
+      <li>We do not sell personal information</li>
+      <li>We respond to data deletion requests within 45 days</li>
+    </ul>
+
+    <h2>Third-Party Services</h2>
+    <p>We use the following services to operate agntai.app:</p>
+    <table>
+      <tr>
+        <th>Service</th>
+        <th>Purpose</th>
+        <th>Data Shared</th>
+      </tr>
+      <tr>
+        <td>Supabase</td>
+        <td>Database & authentication</td>
+        <td>Your account info, leads, contacts</td>
+      </tr>
+      <tr>
+        <td>Claude (Anthropic)</td>
+        <td>AI suggestions</td>
+        <td>Only the text you ask about; not stored by Anthropic</td>
+      </tr>
+      <tr>
+        <td>Netlify</td>
+        <td>Web hosting</td>
+        <td>No personal data</td>
+      </tr>
+    </table>
+
+    <h3>Claude Data Handling</h3>
+    <p>
+      When you ask the AI a question, the text is sent to Claude's API, processed, and deleted. Claude does not train models on your data or store it.
+    </p>
+
+    <h2>Data Breach Notification</h2>
+    <p>If we discover unauthorized access to your data, we will:</p>
+    <ul>
+      <li>Notify you within 72 hours</li>
+      <li>Describe what data was affected</li>
+      <li>Explain what we're doing to fix it</li>
+      <li>Provide guidance on next steps</li>
+    </ul>
+
+    <h2>Changes to This DPA</h2>
+    <p>
+      We may update this DPA as our service grows. If we make material changes (like sharing data with new third parties), we'll notify you via email and in the app.
+    </p>
+
+    <h2>Contact & Questions</h2>
+    <h3>Data Privacy Questions</h3>
+    <p>Email: <a href="mailto:kzurfazekas@gmail.com">kzurfazekas@gmail.com</a></p>
+
+    <h3>For Legal Requests</h3>
+    <p>Formal legal requests (subpoenas, GDPR subject access requests) should be sent to <a href="mailto:kzurfazekas@gmail.com">kzurfazekas@gmail.com</a> with "[LEGAL REQUEST]" in the subject line.</p>
+
+    <div class="highlight-box" style="margin-top:40px;">
+      <p><strong>By using agntai.app, you acknowledge that you have read and understood this Data Processing Agreement.</strong></p>
+    </div>
+
+    <p style="font-size:13px; color:var(--ink-muted); margin-top:40px;">
+      Version 1.0 · Last updated August 19, 2026 · Pilot Phase<br>
+      <em>This DPA will be formalized with legal counsel before commercial launch.</em>
+    </p>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div>© 2026 Agntai · Built with care in California</div>
+    <div style="display:flex; gap:22px; font-size:13px;">
+      <a href="/">Home</a>
+      <a href="/dpa.html">Privacy & Data</a>
+      <a href="https://agntai.app">Sign in</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
