@@ -1,29 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
   try {
-    const supabaseClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-    );
+    const event = await req.json();
+    const user = event.record;
 
-    const { user } = await req.json();
-
-    // Send email to admin
-    const { error } = await supabaseClient.auth.admin.sendEmail(
-      "kzurfazekas@gmail.com",
-      "email",
-      {
+    // Send email using Resend (or Supabase mail)
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${Deno.env.get("RESEND_API_KEY")}`,
+      },
+      body: JSON.stringify({
+        from: "noreply@agntai.app",
+        to: "kzurfazekas@gmail.com",
         subject: "New Sign up at Agntai",
         html: `<!DOCTYPE html>
 <html>
@@ -66,39 +57,24 @@ serve(async (req) => {
       </p>
 
       <div class="timestamp">
-        Signed up at: ${new Date().toLocaleString()}<br>
+        Signed up: ${new Date().toLocaleString()}<br>
         <a href="https://supabase.com/dashboard/project/ivjdhgyaqbufqtjbqlnu/auth/users" style="color: #1a6b4a; text-decoration: none;">View in Supabase →</a>
       </div>
     </div>
   </div>
 </body>
 </html>`,
-      },
-    );
+      }),
+    });
 
-    if (error) {
-      console.error("Email send error:", error);
-      return new Response(
-        JSON.stringify({ success: false, error: error.message }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
+    if (!response.ok) {
+      console.error("Email send failed:", await response.text());
+      return new Response(JSON.stringify({ success: false }), { status: 200 });
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
   } catch (error) {
     console.error("Error:", error);
-    return new Response(
-      JSON.stringify({ success: false, error: error.message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      },
-    );
+    return new Response(JSON.stringify({ success: false }), { status: 200 });
   }
 });

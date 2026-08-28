@@ -149,6 +149,42 @@ Details: ${leadData.details || ""}`;
     }
 
     console.log("Lead created successfully:", leadId, "with AI-extracted data");
+
+    // Get agent email to send notification
+    const { data: agentData, error: agentError } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("id", agentId)
+      .single();
+
+    if (agentData && agentData.email) {
+      const resendApiKey = Deno.env.get("RESEND_API_KEY");
+      if (resendApiKey) {
+        try {
+          await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${resendApiKey}`,
+            },
+            body: JSON.stringify({
+              from: "noreply@agntai.app",
+              to: agentData.email,
+              subject: "New Lead: " + (leadData.name || "Unknown"),
+              html: `<p>New lead received:</p>
+<p><strong>${leadData.name || "Unknown"}</strong></p>
+<p>Email: ${leadData.email || "Not provided"}</p>
+<p>Phone: ${leadData.phone || "Not provided"}</p>
+<p><strong>Details:</strong><br>${leadNotes}</p>
+<p><a href="https://agntai.app">View in Agntai →</a></p>`,
+            }),
+          });
+        } catch (emailError) {
+          console.error("Failed to send notification email:", emailError);
+        }
+      }
+    }
+
     return new Response("OK", { status: 200 });
   } catch (error) {
     console.error("Caught error:", error);
