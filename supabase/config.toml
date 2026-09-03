@@ -1,2 +1,5 @@
 [functions.send-confirmation-email]
 verify_jwt = false
+
+[functions.hyper-endpoint]
+verify_jwt = true
