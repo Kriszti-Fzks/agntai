@@ -8069,6 +8069,16 @@ function AuthPage({onAuth}){
         agent_id:r.data.user.id,
         email:uniqueEmail
       });
+      // Send admin notification
+      try {
+        await fetch(`${SUPABASE_URL}/functions/v1/notify-admin-signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ record: { email: r.data.user.email, id: r.data.user.id } })
+        });
+      } catch(err) {
+        console.error('Admin notification failed (non-blocking):', err);
+      }
     }
     // Supabase sends a confirmation email — show the check-email screen
     setSignedUpEmail(email);
