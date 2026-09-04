@@ -5,6 +5,9 @@ serve(async (req) => {
     const event = await req.json();
     const user = event.record;
 
+    console.log("notify-admin-signup called with:", { email: user?.email, id: user?.id });
+    console.log("RESEND_API_KEY set:", !!Deno.env.get("RESEND_API_KEY"));
+
     // Send email using Resend (or Supabase mail)
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -67,11 +70,16 @@ serve(async (req) => {
       }),
     });
 
+    const responseData = await response.text();
+    console.log("Resend response status:", response.status);
+    console.log("Resend response:", responseData);
+
     if (!response.ok) {
-      console.error("Email send failed:", await response.text());
-      return new Response(JSON.stringify({ success: false }), { status: 200 });
+      console.error("Email send failed:", responseData);
+      return new Response(JSON.stringify({ success: false, error: responseData }), { status: 200 });
     }
 
+    console.log("Email sent successfully to kzurfazekas@gmail.com");
     return new Response(JSON.stringify({ success: true }), { status: 200 });
   } catch (error) {
     console.error("Error:", error);
