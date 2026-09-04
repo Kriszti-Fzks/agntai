@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.hyper-endpoint]
 verify_jwt = true
+
+[functions.notify-admin-signup]
+verify_jwt = false
