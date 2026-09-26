@@ -1,10 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 serve(async (req) => {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+
   try {
-    // Handle empty request body
+    // Handle CORS preflight
     if (req.method === 'OPTIONS') {
-      return new Response(null, { status: 200 });
+      return new Response(null, { headers: corsHeaders, status: 200 });
     }
 
     const bodyText = await req.text();
@@ -89,13 +95,13 @@ serve(async (req) => {
 
     if (!response.ok) {
       console.error("Email send failed:", responseData);
-      return new Response(JSON.stringify({ success: false, error: responseData }), { status: 200 });
+      return new Response(JSON.stringify({ success: false, error: responseData }), { headers: corsHeaders, status: 200 });
     }
 
     console.log("Email sent successfully to kzurfazekas@gmail.com");
-    return new Response(JSON.stringify({ success: true }), { status: 200 });
+    return new Response(JSON.stringify({ success: true }), { headers: corsHeaders, status: 200 });
   } catch (error) {
     console.error("Error:", error);
-    return new Response(JSON.stringify({ success: false }), { status: 200 });
+    return new Response(JSON.stringify({ success: false }), { headers: corsHeaders, status: 200 });
   }
 });
