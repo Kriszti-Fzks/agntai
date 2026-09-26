@@ -8143,10 +8143,12 @@ function AuthPage({onAuth}){
         date:new Date().toISOString().split('T')[0],
         count:0
       });
-      // Send admin notification via Supabase Functions
+      // Send admin notification
       try {
-        await db.functions.invoke('notify-admin-signup', {
-          body: { record: { email: r.data.user.email, id: r.data.user.id } }
+        await fetch(`${SUPABASE_URL}/functions/v1/notify-admin-signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ record: { email: r.data.user.email, id: r.data.user.id } })
         });
       } catch(err) {
         console.error('Admin notification failed (non-blocking):', err);
