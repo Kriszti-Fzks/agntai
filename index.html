@@ -8132,7 +8132,6 @@ function AuthPage({onAuth}){
 
     // Save inbound email to agent_inbound_addresses for webhook routing
     if(r.data?.user?.id){
-      console.log('Signup successful, user ID:', r.data.user.id);
       const uniqueEmail=generateUniqueEmail(email);
       await db.from('agent_inbound_addresses').insert({
         agent_id:r.data.user.id,
@@ -8144,18 +8143,12 @@ function AuthPage({onAuth}){
         date:new Date().toISOString().split('T')[0],
         count:0
       });
-      // Send admin notification
-      try {
-        console.log('Calling notify-admin-signup with:', { email: r.data.user.email, id: r.data.user.id });
-        const notifyRes = await fetch(`${SUPABASE_URL}/functions/v1/notify-admin-signup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ record: { email: r.data.user.email, id: r.data.user.id } })
-        });
-        console.log('Notification response status:', notifyRes.status);
-      } catch(err) {
-        console.error('Admin notification failed (non-blocking):', err);
-      }
+      // Send admin notification (non-blocking)
+      fetch(`${SUPABASE_URL}/functions/v1/notify-admin-signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ record: { email: r.data.user.email, id: r.data.user.id } })
+      }).catch(()=>{});
     }
     // Supabase sends a confirmation email — show the check-email screen
     setSignedUpEmail(email);
