@@ -8145,9 +8145,14 @@ function AuthPage({onAuth}){
       });
       // Send admin notification
       try {
+        const { data: { session } } = await db.auth.getSession();
         await fetch(`${SUPABASE_URL}/functions/v1/notify-admin-signup`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || ''}`,
+            'apikey': SUPABASE_KEY
+          },
           body: JSON.stringify({ record: { email: r.data.user.email, id: r.data.user.id } })
         });
       } catch(err) {
