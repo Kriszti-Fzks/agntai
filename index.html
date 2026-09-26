@@ -11293,6 +11293,13 @@ function App(){
     const wl={...withSphereDefault,agent_id:user?.id};
     setLeads(prev=>[wl,...prev]);
     setSaving(true);
+
+    // Track first real lead added (filter out demo leads)
+    const nonDemoLeads = leads.filter(x => !x.name || !x.name.includes('Demo'));
+    if (nonDemoLeads.length === 0 && window.gtag) {
+      gtag('event', 'first_real_lead_added', { lead_name: l.name });
+    }
+
     await dbSaveLead(wl);
     setSaving(false);
   };
