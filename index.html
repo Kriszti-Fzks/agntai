@@ -4134,9 +4134,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       setCommsMap(communications);
       setCommsLoaded(true);
     } else {
-      setCommsLoaded(false);
+      // For demo leads (no communications), mark as loaded immediately so UI shows instantly
+      // Triage will still run in background
+      setCommsLoaded(Object.keys(leads).length > 0);
     }
-  },[communications]);
+  },[communications, leads.length]);
 
   // ── TASK GENERATION ────────────────────────────────────────────────────────
   const allTasks=useMemo(()=>{
