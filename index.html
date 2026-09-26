@@ -1617,43 +1617,61 @@ async function callAnthropic(body) {
 
 // ── DAILY AI ACTION LIMIT (20 per user per day for free beta) ──
 async function checkAIActionLimit() {
-  const { data: { session } } = await db.auth.getSession();
-  if (!session) throw new Error('Not logged in');
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) {
+      console.warn('Cost limit check: not logged in');
+      return true; // Allow call if not logged in (shouldn't happen)
+    }
 
-  const today = new Date().toISOString().split('T')[0];
-  const { data: limits, error } = await db
-    .from('ai_action_limits')
-    .select('count, date')
-    .eq('user_id', session.user.id)
-    .eq('date', today)
-    .single();
+    const today = new Date().toISOString().split('T')[0];
+    const { data: limits, error } = await db
+      .from('ai_action_limits')
+      .select('count, date')
+      .eq('user_id', session.user.id)
+      .eq('date', today)
+      .single();
 
-  if (error || !limits) {
-    // First action today, create record with count 0
-    await db.from('ai_action_limits').insert({
-      user_id: session.user.id,
-      date: today,
-      count: 1
-    });
+    if (error) {
+      // If query fails, silently create a new record
+      const insertErr = await db.from('ai_action_limits').insert({
+        user_id: session.user.id,
+        date: today,
+        count: 1
+      }).then(() => null).catch(e => e);
+
+      if (insertErr) {
+        console.warn('Cost limit check: insert failed', insertErr);
+        // Don't block the AI call
+      }
+      return true;
+    }
+
+    if (limits && limits.count >= 20) {
+      throw new Error("You've hit today's beta limit (20 AI actions). Resets tomorrow.");
+    }
+
+    // Increment counter (non-blocking - don't let this fail the whole call)
+    if (limits) {
+      db.from('ai_action_limits')
+        .update({ count: limits.count + 1 })
+        .eq('user_id', session.user.id)
+        .eq('date', today)
+        .catch(e => console.warn('Cost increment failed:', e));
+    }
+
     return true;
+  } catch(e) {
+    console.error('Cost limit check error:', e.message);
+    throw e; // Re-throw limit exceeded errors, but not connection errors
   }
-
-  if (limits.count >= 20) {
-    throw new Error("You've hit today's beta limit (20 AI actions). Resets tomorrow.");
-  }
-
-  // Increment counter
-  await db.from('ai_action_limits')
-    .update({ count: limits.count + 1 })
-    .eq('user_id', session.user.id)
-    .eq('date', today);
-
-  return true;
 }
 
 async function callClaude(prompt, maxTokens=600) {
   try {
+    // Check daily limit (throws if exceeded)
     await checkAIActionLimit();
+
     const { data } = await callAnthropic({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: maxTokens,
@@ -1661,7 +1679,12 @@ async function callClaude(prompt, maxTokens=600) {
     });
     if(data.content && data.content[0]) return data.content[0].text.trim();
     return null;
-  } catch(e) { console.error('AI error:', e); return null; }
+  } catch(e) {
+    console.error('AI error:', e.message);
+    // Re-throw limit errors so UI can show them
+    if(e.message && e.message.includes('beta limit')) throw e;
+    return null;
+  }
 }
 
 // ── GMAIL FUNCTIONS ───────────────────────────────────────────────────────────
