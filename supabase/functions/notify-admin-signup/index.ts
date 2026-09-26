@@ -2,7 +2,20 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 serve(async (req) => {
   try {
-    const event = await req.json();
+    // Handle empty request body
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 200 });
+    }
+
+    const bodyText = await req.text();
+    console.log("Request body:", bodyText || "(empty)");
+
+    if (!bodyText) {
+      console.error("Empty request body received");
+      return new Response(JSON.stringify({ success: false, error: "Empty body" }), { status: 400 });
+    }
+
+    const event = JSON.parse(bodyText);
     const user = event.record;
 
     console.log("notify-admin-signup called with:", { email: user?.email, id: user?.id });
