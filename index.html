@@ -1615,8 +1615,45 @@ async function callAnthropic(body) {
   return { res, data };
 }
 
+// ── DAILY AI ACTION LIMIT (20 per user per day for free beta) ──
+async function checkAIActionLimit() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) throw new Error('Not logged in');
+
+  const today = new Date().toISOString().split('T')[0];
+  const { data: limits, error } = await db
+    .from('ai_action_limits')
+    .select('count, date')
+    .eq('user_id', session.user.id)
+    .eq('date', today)
+    .single();
+
+  if (error || !limits) {
+    // First action today, create record with count 0
+    await db.from('ai_action_limits').insert({
+      user_id: session.user.id,
+      date: today,
+      count: 1
+    });
+    return true;
+  }
+
+  if (limits.count >= 20) {
+    throw new Error("You've hit today's beta limit (20 AI actions). Resets tomorrow.");
+  }
+
+  // Increment counter
+  await db.from('ai_action_limits')
+    .update({ count: limits.count + 1 })
+    .eq('user_id', session.user.id)
+    .eq('date', today);
+
+  return true;
+}
+
 async function callClaude(prompt, maxTokens=600) {
   try {
+    await checkAIActionLimit();
     const { data } = await callAnthropic({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: maxTokens,
@@ -8005,11 +8042,9 @@ function AuthPage({onAuth}){
   const [fullName,setFullName]=React.useState('');
   const [brokerage,setBrokerage]=React.useState('');
   const [license,setLicense]=React.useState('');
-  // beta request fields (Phase 1 of signup)
   const [city,setCity]=React.useState('');
   const [agentStatus,setAgentStatus]=React.useState(''); // 'licensed' | 'in_process' | 'not_agent'
-  // signup phase: 'request' (Phase 1) | 'reviewing' (1.5s loading) | 'approved' (Phase 2 — finish account)
-  const [signupPhase,setSignupPhase]=React.useState('request');
+  const [yearsInRealEstate,setYearsInRealEstate]=React.useState(''); // '0-1' | '1-3' | '3-5' | '5+'
   const [err,setErr]=React.useState('');
   const [busy,setBusy]=React.useState(false);
   const [copied,setCopied]=React.useState(false);
@@ -8029,54 +8064,59 @@ function AuthPage({onAuth}){
     onAuth(r.user);
   };
 
-  // ── SIGN UP — Phase 1: Request Access ──
-  const doRequestAccess=async()=>{
+  // ── Analytics event tracking ──
+  const trackEvent = (eventName, params = {}) => {
+    if (window.gtag) {
+      gtag('event', eventName, params);
+    }
+  };
+
+  // ── SIGN UP — Open beta signup ──
+  const doFinishSignup=async()=>{
     setErr('');
     if(!fullName.trim()){setErr('Please enter your full name.');return;}
     if(!email.trim()){setErr('Please enter your email address.');return;}
+    if(!password){setErr('Please enter a password.');return;}
+    if(password.length<8){setErr('Password must be at least 8 characters.');return;}
     if(!city.trim()){setErr('Please enter your city.');return;}
     if(!agentStatus){setErr('Please tell us if you\'re a licensed real estate agent.');return;}
-    setBusy(true);
-    setSignupPhase('reviewing');
-    // Save the request and notify the founder — both run silently and don't block
-    saveBetaRequest({name:fullName.trim(), email:email.trim(), city:city.trim(), agentStatus});
-    sendSignupNotification({name:fullName.trim(), email:email.trim(), city:city.trim(), agentStatus});
-    // Brief "reviewing" delay — feels like real approval, not auto-approve
-    await new Promise(r=>setTimeout(r,1500));
-    setBusy(false);
-    setSignupPhase('approved');
-  };
+    if(!yearsInRealEstate){setErr('Please tell us your years of real estate experience.');return;}
 
-  // ── SIGN UP — Phase 2: Finish creating account ──
-  const ACCESS_CODE = 'AGNTAI2026'; // applied invisibly — user never sees this
-  const doFinishSignup=async()=>{
-    setErr('');
-    if(password.length<8){setErr('Password must be at least 8 characters.');return;}
     setBusy(true);
+    trackEvent('signup_submitted', { agent_status: agentStatus });
+
     const r=await db.auth.signUp({
       email,password,
       options:{
         data:{
           full_name:fullName,
-          brokerage:brokerage.trim()||null,
-          license_number:license.trim()||null,
           city:city.trim(),
           agent_status:agentStatus,
-          access_code:ACCESS_CODE,
+          years_in_real_estate:yearsInRealEstate,
+          brokerage:brokerage.trim()||null,
+          license_number:license.trim()||null,
           unique_email:generateUniqueEmail(email),
-          is_new_signup:true
+          is_new_signup:true,
+          daily_ai_limit:20
         },
-        emailRedirectTo:window.location.origin+'/'   // ← always redirect to root after confirming
+        emailRedirectTo:window.location.origin+'/'
       }
     });
     setBusy(false);
     if(r.error){setErr(r.error.message);return;}
+
     // Save inbound email to agent_inbound_addresses for webhook routing
     if(r.data?.user?.id){
       const uniqueEmail=generateUniqueEmail(email);
       await db.from('agent_inbound_addresses').insert({
         agent_id:r.data.user.id,
         email:uniqueEmail
+      });
+      // Create initial AI action limit record
+      await db.from('ai_action_limits').insert({
+        user_id:r.data.user.id,
+        date:new Date().toISOString().split('T')[0],
+        count:0
       });
       // Send admin notification
       try {
@@ -8091,6 +8131,7 @@ function AuthPage({onAuth}){
     }
     // Supabase sends a confirmation email — show the check-email screen
     setSignedUpEmail(email);
+    trackEvent('email_confirmed', { email: email });
     setMode('check-email');
   };
 
@@ -8171,115 +8212,70 @@ function AuthPage({onAuth}){
     );
   }
 
-  // ── SIGN UP FORM (two-phase: Request → Reviewing → Approved/Finish) ──
+  // ── SIGN UP FORM (Open beta — single form) ──
   if(mode==='signup'){
-    // Phase 1: Request Access
-    if(signupPhase==='request'){
-      return React.createElement('div',{className:'aw'},
-        React.createElement('div',{className:'ac',style:{maxWidth:460}},
-          React.createElement(AuthLogo),
-          React.createElement('div',{style:{display:'inline-block',background:'#f0faf5',border:'1px solid #bbf0d8',color:'#1a6b4a',fontSize:11,fontWeight:600,padding:'3px 9px',borderRadius:4,marginBottom:12,letterSpacing:'0.4px',textTransform:'uppercase'}},'Private Beta'),
-          React.createElement('div',{style:{fontSize:22,fontWeight:700,marginBottom:6,letterSpacing:'-0.4px'}},'Request beta access'),
-          React.createElement('div',{style:{fontSize:13,color:'#a09d98',marginBottom:22,lineHeight:1.5}},'Agntai is in private beta for solo real estate agents. Tell us a little about yourself and we\'ll get you set up.'),
+    return React.createElement('div',{className:'aw'},
+      React.createElement('div',{className:'ac',style:{maxWidth:480}},
+        React.createElement(AuthLogo),
+        React.createElement('div',{style:{display:'inline-block',background:'#f0faf5',border:'1px solid #bbf0d8',color:'#1a6b4a',fontSize:11,fontWeight:600,padding:'3px 9px',borderRadius:4,marginBottom:12,letterSpacing:'0.4px',textTransform:'uppercase'}},'Open Beta'),
+        React.createElement('div',{style:{fontSize:22,fontWeight:700,marginBottom:6,letterSpacing:'-0.4px'}},'Create your account'),
+        React.createElement('div',{style:{fontSize:13,color:'#a09d98',marginBottom:22,lineHeight:1.5}},'Join Agntai beta and start your first day with a plan. No credit card required.'),
 
-          React.createElement(AuthField,{label:'Full Name',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
-          React.createElement(AuthField,{label:'Email Address',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
-          React.createElement(AuthField,{label:'City',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
+        React.createElement(AuthField,{label:'Full Name',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
+        React.createElement(AuthField,{label:'Email Address',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
+        React.createElement(AuthField,{label:'Password (min 8 chars)',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
+        React.createElement(AuthField,{label:'City',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
 
-          // Agent status — three radio-style buttons
-          React.createElement('div',{style:{marginBottom:14}},
-            React.createElement('div',{style:{fontSize:12,fontWeight:500,marginBottom:8,color:'#3d3a35'}},'Are you a licensed real estate agent?'),
-            React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},
-              ...[
-                {v:'licensed', l:'Yes — I\'m licensed and active'},
-                {v:'in_process', l:'In the process — getting licensed soon'},
-                {v:'not_agent', l:'No — I\'m something else'}
-              ].map(o=>
-                React.createElement('button',{key:o.v,type:'button',
-                  onClick:()=>setAgentStatus(o.v),
-                  style:{
-                    textAlign:'left',padding:'10px 12px',
-                    background:agentStatus===o.v?'#f0faf5':'white',
-                    border:'1px solid '+(agentStatus===o.v?'#1a6b4a':'#e8e6e2'),
-                    borderRadius:6,fontSize:13,fontFamily:'inherit',cursor:'pointer',
-                    color:agentStatus===o.v?'#1a6b4a':'#3d3a35',
-                    fontWeight:agentStatus===o.v?500:400,
-                    display:'flex',alignItems:'center',gap:9
-                  }},
-                  React.createElement('span',{style:{
-                    width:14,height:14,borderRadius:'50%',
-                    border:'1.5px solid '+(agentStatus===o.v?'#1a6b4a':'#c8c5c0'),
-                    background:agentStatus===o.v?'#1a6b4a':'white',
-                    display:'flex',alignItems:'center',justifyContent:'center',
-                    flexShrink:0
-                  }},agentStatus===o.v?React.createElement('span',{style:{width:5,height:5,borderRadius:'50%',background:'white'}}):null),
-                  o.l
-                )
+        // Agent status
+        React.createElement('div',{style:{marginBottom:14}},
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Licensed agent?'),
+          React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},
+            ...[
+              {v:'licensed', l:'Yes — I\'m licensed'},
+              {v:'in_process', l:'Getting licensed'},
+              {v:'not_agent', l:'Not a real estate agent'}
+            ].map(o=>
+              React.createElement('button',{key:o.v,type:'button',
+                onClick:()=>setAgentStatus(o.v),
+                style:{
+                  textAlign:'left',padding:'10px 12px',
+                  background:agentStatus===o.v?'#f0faf5':'white',
+                  border:'1px solid '+(agentStatus===o.v?'#1a6b4a':'#e8e6e2'),
+                  borderRadius:6,fontSize:13,fontFamily:'inherit',cursor:'pointer',
+                  color:agentStatus===o.v?'#1a6b4a':'#3d3a35',
+                  fontWeight:agentStatus===o.v?500:400
+                }},
+                o.l
               )
             )
-          ),
-
-          React.createElement('button',{
-            style:{width:'100%',padding:11,background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:14,fontWeight:600,fontFamily:'inherit',cursor:'pointer',opacity:busy?0.6:1,marginTop:4},
-            onClick:doRequestAccess,disabled:busy
-          },'Request Beta Access →'),
-          err&&React.createElement('div',{style:{marginTop:12,padding:'10px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:13,color:'#dc2626'}},err),
-          React.createElement('div',{style:{textAlign:'center',marginTop:18,fontSize:13,color:'#a09d98'}},
-            'Already have an account? ',
-            React.createElement('button',{style:{background:'none',border:'none',color:'#1a6b4a',fontWeight:600,cursor:'pointer',fontFamily:'inherit',fontSize:13},onClick:()=>go('login')},'Sign in')
-          )
-        )
-      );
-    }
-
-    // Phase 1.5: Reviewing (1.5s loading state — feels like real approval)
-    if(signupPhase==='reviewing'){
-      return React.createElement('div',{className:'aw'},
-        React.createElement('div',{className:'ac',style:{maxWidth:460,textAlign:'center',padding:'48px 32px'}},
-          React.createElement(AuthLogo),
-          React.createElement('div',{style:{margin:'18px auto 14px',width:36,height:36,border:'3px solid #e8e6e2',borderTopColor:'#1a6b4a',borderRadius:'50%',animation:'spin 0.9s linear infinite'}}),
-          React.createElement('style',null,'@keyframes spin{to{transform:rotate(360deg)}}'),
-          React.createElement('div',{style:{fontSize:17,fontWeight:600,color:'#1a1916',marginBottom:6}},'Reviewing your request...'),
-          React.createElement('div',{style:{fontSize:13,color:'#a09d98'}},'This will only take a moment.')
-        )
-      );
-    }
-
-    // Phase 2: Approved — finish creating account
-    return React.createElement('div',{className:'aw'},
-      React.createElement('div',{className:'ac',style:{maxWidth:460}},
-        React.createElement(AuthLogo),
-        // Approval banner
-        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:8,padding:'12px 14px',marginBottom:18}},
-          React.createElement('div',{style:{width:24,height:24,borderRadius:'50%',background:'#1a6b4a',color:'white',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:13,fontWeight:700}},'✓'),
-          React.createElement('div',null,
-            React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a6b4a'}},'Welcome, '+(fullName.split(' ')[0]||'there')+' — you\'re approved.'),
-            React.createElement('div',{style:{fontSize:11,color:'#3d3a35',marginTop:2}},'Set a password to finish creating your account.')
           )
         ),
 
-        // Friendly heads-up for non-agents
-        agentStatus==='not_agent' && React.createElement('div',{style:{background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'10px 12px',fontSize:12,color:'#92400e',marginBottom:14,lineHeight:1.5}},
-          React.createElement('strong',null,'Heads up:'),' Agntai is built specifically for real estate workflows. You\'re welcome to look around, but it might feel a bit empty for other use cases.'
+        // Years in real estate
+        React.createElement('div',{style:{marginBottom:14}},
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Years in real estate'),
+          React.createElement('select',{
+            value:yearsInRealEstate,
+            onChange:e=>setYearsInRealEstate(e.target.value),
+            style:{width:'100%',padding:'10px 12px',border:'1px solid #e8e6e2',borderRadius:6,fontFamily:'inherit',fontSize:13,outline:'none'}
+          },
+            React.createElement('option',{value:''},'Select...'),
+            React.createElement('option',{value:'0-1'},'0–1 years'),
+            React.createElement('option',{value:'1-3'},'1–3 years'),
+            React.createElement('option',{value:'3-5'},'3–5 years'),
+            React.createElement('option',{value:'5+'},'5+ years')
+          )
         ),
-
-        // Optional: brokerage + license (side by side)
-        React.createElement('div',{style:{fontSize:11,color:'#a09d98',marginBottom:8,letterSpacing:'0.3px',textTransform:'uppercase',fontWeight:600}},'Optional — you can add these later'),
-        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},
-          React.createElement(AuthField,{label:'Brokerage',placeholder:'e.g. Keller Williams',value:brokerage,onChange:e=>setBrokerage(e.target.value)}),
-          React.createElement(AuthField,{label:'License Number',placeholder:'e.g. 02123456',value:license,onChange:e=>setLicense(e.target.value)})
-        ),
-
-        // Required: password
-        React.createElement(AuthField,{label:'Password (min 8 chars)',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value),onKeyDown:enter(doFinishSignup)}),
 
         React.createElement('button',{
-          style:{width:'100%',padding:11,background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:14,fontWeight:600,fontFamily:'inherit',cursor:'pointer',opacity:busy?0.6:1,marginTop:4},
-          onClick:doFinishSignup,disabled:busy
+          style:{width:'100%',padding:11,background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:14,fontWeight:600,fontFamily:'inherit',cursor:'pointer',opacity:busy?0.6:1,marginTop:8},
+          onClick:doFinishSignup,disabled:busy,
+          onKeyDown:enter(doFinishSignup)
         },busy?'Creating account...':'Create Account →'),
         err&&React.createElement('div',{style:{marginTop:12,padding:'10px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:13,color:'#dc2626'}},err),
-        React.createElement('div',{style:{textAlign:'center',marginTop:18,fontSize:12,color:'#a09d98'}},
-          'Your leads are private — nobody else sees them.'
+        React.createElement('div',{style:{textAlign:'center',marginTop:16,fontSize:12,color:'#a09d98'}},
+          'Already have an account? ',
+          React.createElement('button',{style:{background:'none',border:'none',color:'#1a6b4a',fontWeight:600,cursor:'pointer',fontFamily:'inherit',fontSize:12},onClick:()=>go('login')},'Sign in')
         )
       )
     );
@@ -11176,6 +11172,7 @@ function App(){
     // Brand new signup — add demo leads and show welcome
     if(meta.is_new_signup&&meta.is_new_signup!==false&&meta.is_new_signup!=='false'){
       isNewUserRef.current=true;
+      if(window.gtag){gtag('event','first_login',{user_id:user.id});}
       const demos=makeDemoLeads(user.id);
       setLeads(demos);
       setDbReady(true);

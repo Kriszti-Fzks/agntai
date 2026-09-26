@@ -795,7 +795,7 @@ a { color:inherit; text-decoration:none; }
     <div>
       <div class="eyebrow">
         <span class="eyebrow-dot"></span>
-        Private beta · By invitation
+        Open beta · Free during beta
       </div>
       <h1 class="hero-title serif">
         Know exactly what to <em>do today</em> to close more deals.
@@ -810,7 +810,7 @@ a { color:inherit; text-decoration:none; }
         </a>
         <a href="#how" class="btn-secondary">See how it works</a>
       </div>
-      <div class="hero-note">Free during beta · Access code required · Takes 60 seconds</div>
+      <div class="hero-note">Free during beta · No credit card · Takes 60 seconds</div>
     </div>
 
     <!-- Mock AI playbook card -->
@@ -822,7 +822,7 @@ a { color:inherit; text-decoration:none; }
           </div>
           <div class="today-meta">
             <div class="today-head-title">Today</div>
-            <div class="today-head-sub">Thursday, April 24</div>
+            <div class="today-head-sub" id="demo-date">Thursday, April 24</div>
           </div>
           <div class="today-head-count">3 tasks</div>
         </div>
@@ -1012,7 +1012,7 @@ a { color:inherit; text-decoration:none; }
       <div class="step">
         <div class="step-num">01</div>
         <div class="step-title">Sign up in 60 seconds</div>
-        <div class="step-body">Email, access code, confirm. No credit card, no sales call.</div>
+        <div class="step-body">Email, password, confirm. No credit card, no sales call.</div>
       </div>
       <div class="step">
         <div class="step-num">02</div>
@@ -1122,10 +1122,25 @@ a { color:inherit; text-decoration:none; }
     <div style="display:flex; gap:22px;">
       <a href="#how">How it works</a>
       <a href="/dpa.html">Privacy & Data</a>
-      <a href="https://agntai.app" onclick="gtag('event', 'sign_up')">Sign in</a>
+      <a href="https://agntai.app?mode=login" onclick="gtag('event', 'sign_in_click')">Sign in</a>
     </div>
   </div>
 </footer>
+
+<script>
+// Update demo date to today
+const today = new Date();
+const dateStr = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+const dateEl = document.getElementById('demo-date');
+if (dateEl) dateEl.textContent = dateStr;
+
+// Track all CTA clicks
+document.querySelectorAll('a[onclick*="sign_up"]').forEach(el => {
+  el.addEventListener('click', function() {
+    if (gtag) gtag('event', 'beta_cta_click');
+  });
+});
+</script>
 
 </body>
 </html>
