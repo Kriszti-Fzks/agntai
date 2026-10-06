@@ -24,4 +24,7 @@ npm-debug.log*
 
 # OS misc
 Thumbs.db
+
+# Large asset files (served by Netlify from project root)
+logo-*.png
 <!-- Force rebuild 1789002340 -->
