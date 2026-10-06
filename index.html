@@ -9449,11 +9449,8 @@ function MobileHeader({onProfile, onSignOut}){
 function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
   return React.createElement('aside',{className:'sb'+(collapsed?' collapsed':'')},
     React.createElement('div',{className:'sb-logo'},
-      React.createElement('div',{className:'sb-mark'},'RE'),
-      React.createElement('div',{className:'sb-logo-text'},
-        React.createElement('span',{className:'sb-name'},'Agntai'),
-        React.createElement('span',{className:'sb-sub'},'Pro Platform')
-      )
+      React.createElement('img',{src:'logo-secondary.png',alt:'Agntai',style:{width:'32px',height:'auto'}}),
+      React.createElement('img',{src:'logo-primary.png',alt:'Agntai',style:{height:'24px',width:'auto',flex:1}})
     ),
     React.createElement('nav',{className:'sb-nav'},
       React.createElement('span',{className:'sb-lbl'},'Main'),
@@ -10431,11 +10428,8 @@ function WelcomeScreen({agentName, onStart}){
   return React.createElement('div',{className:'ob-wrap'},
     React.createElement('div',{className:'ob-card'},
       React.createElement('div',{className:'ob-logo'},
-        React.createElement('div',{className:'ob-mark'},'A'),
-        React.createElement('div',null,
-          React.createElement('div',{style:{fontSize:17,fontWeight:700,letterSpacing:'-0.3px'}},'Agntai'),
-          React.createElement('div',{style:{fontSize:11,color:'#a09d98'}},'Beta')
-        )
+        React.createElement('img',{src:'logo-secondary.png',alt:'Agntai',style:{width:'36px',height:'auto'}}),
+        React.createElement('img',{src:'logo-primary.png',alt:'Agntai',style:{height:'28px',width:'auto'}})
       ),
       React.createElement('div',{className:'ob-title'},'Welcome, '+agentName.split(' ')[0]+' 👋'),
       React.createElement('div',{className:'ob-sub',style:{marginBottom:24}},
@@ -10481,11 +10475,8 @@ function ProfileSetup({user, onComplete}){
   return React.createElement('div',{className:'ob-wrap'},
     React.createElement('div',{className:'ob-card'},
       React.createElement('div',{className:'ob-logo'},
-        React.createElement('div',{className:'ob-mark'},'A'),
-        React.createElement('div',null,
-          React.createElement('div',{style:{fontSize:17,fontWeight:700,letterSpacing:'-0.3px'}},'Agntai'),
-          React.createElement('div',{style:{fontSize:11,color:'#a09d98'}},'Beta')
-        )
+        React.createElement('img',{src:'logo-secondary.png',alt:'Agntai',style:{width:'36px',height:'auto'}}),
+        React.createElement('img',{src:'logo-primary.png',alt:'Agntai',style:{height:'28px',width:'auto'}})
       ),
       React.createElement('div',{className:'ob-step'},'Step 1 of 1 — Quick setup'),
       React.createElement('div',{className:'ob-title'},'Set up your profile'),
