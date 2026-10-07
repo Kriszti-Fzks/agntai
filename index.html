@@ -9449,8 +9449,7 @@ function MobileHeader({onProfile, onSignOut}){
 function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
   return React.createElement('aside',{className:'sb'+(collapsed?' collapsed':'')},
     React.createElement('div',{className:'sb-logo'},
-      React.createElement('img',{src:'/logo-secondary.png',alt:'Agntai',style:{width:'32px',height:'auto'}}),
-      React.createElement('img',{src:'/logo-primary.png',alt:'Agntai',style:{height:'24px',width:'auto',flex:1}})
+      React.createElement('img',{src:'/logo-primary.png',alt:'Agntai',style:{height:'32px',width:'auto'}})
     ),
     React.createElement('nav',{className:'sb-nav'},
       React.createElement('span',{className:'sb-lbl'},'Main'),
