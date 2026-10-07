@@ -9449,7 +9449,7 @@ function MobileHeader({onProfile, onSignOut}){
 function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
   return React.createElement('aside',{className:'sb'+(collapsed?' collapsed':'')},
     React.createElement('div',{className:'sb-logo'},
-      React.createElement('img',{src:'/logo-primary.png',alt:'Agntai',style:{height:'32px',width:'auto'}})
+      React.createElement('img',{src:'/logo-primary.png?v=1',alt:'Agntai',style:{height:'32px',width:'auto'}})
     ),
     React.createElement('nav',{className:'sb-nav'},
       React.createElement('span',{className:'sb-lbl'},'Main'),
@@ -10428,7 +10428,7 @@ function WelcomeScreen({agentName, onStart}){
     React.createElement('div',{className:'ob-card'},
       React.createElement('div',{className:'ob-logo'},
         React.createElement('img',{src:'/logo-secondary.png',alt:'Agntai',style:{width:'36px',height:'auto'}}),
-        React.createElement('img',{src:'/logo-primary.png',alt:'Agntai',style:{height:'28px',width:'auto'}})
+        React.createElement('img',{src:'/logo-primary.png?v=1',alt:'Agntai',style:{height:'28px',width:'auto'}})
       ),
       React.createElement('div',{className:'ob-title'},'Welcome, '+agentName.split(' ')[0]+' 👋'),
       React.createElement('div',{className:'ob-sub',style:{marginBottom:24}},
@@ -10475,7 +10475,7 @@ function ProfileSetup({user, onComplete}){
     React.createElement('div',{className:'ob-card'},
       React.createElement('div',{className:'ob-logo'},
         React.createElement('img',{src:'/logo-secondary.png',alt:'Agntai',style:{width:'36px',height:'auto'}}),
-        React.createElement('img',{src:'/logo-primary.png',alt:'Agntai',style:{height:'28px',width:'auto'}})
+        React.createElement('img',{src:'/logo-primary.png?v=1',alt:'Agntai',style:{height:'28px',width:'auto'}})
       ),
       React.createElement('div',{className:'ob-step'},'Step 1 of 1 — Quick setup'),
       React.createElement('div',{className:'ob-title'},'Set up your profile'),
