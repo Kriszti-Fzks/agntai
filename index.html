@@ -9447,7 +9447,7 @@ function MobileHeader({onProfile, onSignOut}){
   );
 }
 
-function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
+function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
   return React.createElement('aside',{className:'sb'+(collapsed?' collapsed':'')},
     React.createElement('div',{className:'sb-logo'},
       React.createElement('img',{src:'/agntai-logo-reversed.png',alt:'Agntai',style:{height:'40px',width:'auto'}})
@@ -9471,11 +9471,16 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed}){
         ),
         !collapsed&&React.createElement('span',{style:{color:'rgba(255,255,255,0.3)',fontSize:13,marginLeft:4}},'⚙')
       ),
-      React.createElement('div',{className:'sb-ft-btns',style:{display:'flex',gap:8,marginTop:8}},
+      React.createElement('div',{className:'sb-ft-btns',style:{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}},
         React.createElement('button',{
           onClick:onProfile,
           style:{background:'none',border:'none',color:'rgba(255,255,255,0.4)',cursor:'pointer',fontSize:11,fontFamily:'inherit',textAlign:'left',padding:0,flex:1}
         },'Edit profile'),
+        React.createElement('button',{
+          onClick:onExport,
+          title:'Download all your leads, history, and documents',
+          style:{background:'none',border:'none',color:'rgba(255,255,255,0.4)',cursor:'pointer',fontSize:11,fontFamily:'inherit',padding:0}
+        },'Export'),
         React.createElement('button',{
           onClick:onSignOut,
           style:{background:'none',border:'none',color:'rgba(255,255,255,0.4)',cursor:'pointer',fontSize:11,fontFamily:'inherit',textAlign:'right',padding:0}
@@ -11326,6 +11331,44 @@ function App(){
     setTimeout(()=>setAuthReady(true),100);
   };
 
+  const handleExportData=async()=>{
+    try {
+      if (!user) return alert('Please sign in first');
+      const token = (await db.auth.getSession()).data?.session?.access_token;
+      if (!token) return alert('Authentication required');
+
+      alert('Preparing your data export... This may take a moment for large datasets.');
+
+      const response = await fetch(
+        `${SUPABASE_URL}/functions/v1/export-user-data`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({}),
+        }
+      );
+
+      const data = await response.json();
+      if (!response.ok) {
+        console.error('Export error:', data);
+        return alert('Export failed: ' + (data.error || 'Unknown error'));
+      }
+
+      if (data.downloadUrl) {
+        alert(`✅ Export ready!\n\n${data.message}\n\nDownloading...`);
+        window.open(data.downloadUrl, '_blank');
+      } else {
+        alert('Export ready but no download link generated');
+      }
+    } catch (err) {
+      console.error('Export error:', err);
+      alert('Export failed: ' + String(err));
+    }
+  };
+
   // Auto sign-out after 30 minutes of inactivity
   React.useEffect(() => {
     if (!user) return;
@@ -11372,7 +11415,7 @@ function App(){
         setView(v); setSelId(null);
         // Note: clicking "AI Assistant" in the sidebar preserves the current
         // conversation. To start fresh, the user taps "🆕 New chat" inside the assistant.
-      },onSignOut:handleSignOut,agentEmail:user?.email,onProfile:()=>setShowProfile(true),collapsed:sbCollapsed}),
+      },onSignOut:handleSignOut,agentEmail:user?.email,onProfile:()=>setShowProfile(true),onExport:handleExportData,collapsed:sbCollapsed}),
       React.createElement('button',{
         className:'sb-float-toggle',
         style:{left:sbCollapsed?52:220},
