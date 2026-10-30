@@ -5510,20 +5510,22 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
     const tagsFromSheet = parseTagsCell(get(row,'tags'));
     const allTags = [...new Set([...tagsFromSheet, 'Imported'])];
     leads.push({
-      id: Date.now().toString()+i+Math.floor(Math.random()*9999),
+      id: crypto.randomUUID(),
       name,
       email: email || '',
       phone: normalizePhone(phoneRaw),
       type: normalizeType(get(row,'type')),
       stage: get(row,'stage') || 'New',
       source: get(row,'source') || 'Other',
-      last_contact: new Date().toISOString().slice(0,10),
+      lastContact: new Date().toISOString().slice(0,10),
       notes: finalNotes,
-      next_step: 'Follow up — imported from spreadsheet',
+      nextStep: 'Follow up — imported from spreadsheet',
+      completedSteps: [],
       tags: allTags,
       properties_shared:[], interested_properties:[], toured_properties:[],
       appointments:[], documents:[],
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     });
   });
   return {leads, errors, skippedDupes, count:leads.length};
