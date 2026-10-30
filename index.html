@@ -3342,16 +3342,17 @@ const TC={Buyer:'#2563eb',Seller:'#d97706',Tenant:'#7c3aed',Landlord:'#059669',I
 const fmt=d=>{if(!d)return'—';const s=String(d).slice(0,10);const[y,m,dy]=s.split('-');if(!y||!m||!dy)return'—';const date=new Date(+y,+m-1,+dy);return isNaN(date)?'—':date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});};
 const PIPE=[
   {key:'New',label:'New Lead',color:'#6366f1'},
-  {key:'Tried',label:'Tried',color:'#a855f7'},
-  {key:'Spoke',label:'Engaged',color:'#f59e0b'},
+  {key:'Tried',label:'Contacted',color:'#a855f7'},
+  {key:'Spoke',label:'Spoke With Lead',color:'#f59e0b'},
   {key:'Showing',label:'Showing',color:'#3b82f6'},
-  {key:'Offer',label:'Offer',color:'#f97316'},
+  {key:'Offer',label:'In Progress',color:'#f97316'},
   {key:'Contract',label:'Under Contract',color:'#10b981'},
+  {key:'Nurture',label:'Nurture',color:'#8b5cf6'},
   {key:'Closed',label:'Closed',color:'#1a6b4a'}
 ];
 const SHOW_S=['Showing Homes','Showing Rentals','Touring Properties','Listing Appointment','Rental Evaluation','Searching Deals','Application Submitted'];
 const OFFER_S=['Buyer Rep Signed','Listing Agreement Signed','Active Listing','Active Rental Listing','Lease Signed'];
-const getPK=s=>s==='New'||s==='Lead'?'New':s==='Contacted'?'Tried':s==='Spoke With Lead'||s==='Spoke With Lead'?'Spoke':SHOW_S.includes(s)?'Showing':OFFER_S.includes(s)?'Offer':s==='Under Contract'?'Contract':s==='Closed'?'Closed':'New';
+const getPK=s=>s==='New'||s==='Lead'?'New':s==='Contacted'?'Tried':s==='Spoke With Lead'?'Spoke':SHOW_S.includes(s)?'Showing':OFFER_S.includes(s)?'Offer':s==='Under Contract'?'Contract':s==='Nurture'?'Nurture':s==='Closed'?'Closed':'New';
 const daysSince=d=>{if(!d)return null;const diff=Math.floor((new Date()-new Date(d))/(1000*60*60*24));return diff<0?0:diff;};
 const TAGS=['Hot Lead','First-Time Buyer','Luxury','Cash Buyer','Pre-Approved','Investor','Relocation','Motivated Seller','Referral Source','Past Client','Urgent','Rate Sensitive','Move-Up Buyer','Family','STR Strategy'];
 const gcal=(a,n)=>{const d=a.date.replace(/-/g,'');return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.type+' — '+n)}&details=${encodeURIComponent(a.notes||'')}&dates=${d}T090000/${d}T100000`;};
@@ -5705,6 +5706,8 @@ function ImportModal({onClose, onImport, existingLeads}){
       skippedDupes: built.skippedDupes.length,
     });
     setBusy(false);
+    // Wait 800ms to ensure all database writes complete before showing UI
+    await new Promise(resolve => setTimeout(resolve, 800));
     setStep('done');
     // Clear persisted state — this import is complete.
     try { sessionStorage.removeItem(PERSIST_KEY); } catch(e) {}
@@ -8063,11 +8066,17 @@ function AuthField({label,type,placeholder,value,onChange,onKeyDown}){
 
 function AuthPage({onAuth}){
   // mode: 'login' | 'signup' | 'forgot' | 'check-email' | 'reset-sent'
-  const initialMode=()=>{
+  const getModeFromUrl=()=>{
     const params=new URLSearchParams(window.location.search);
     return params.get('mode')||'login';
   };
-  const [mode,setMode]=React.useState(initialMode());
+  const [mode,setMode]=React.useState(getModeFromUrl());
+  // Watch URL changes and update mode
+  React.useEffect(()=>{
+    const updateMode=()=>setMode(getModeFromUrl());
+    window.addEventListener('popstate',updateMode);
+    return ()=>window.removeEventListener('popstate',updateMode);
+  },[]);
   const [email,setEmail]=React.useState('');
   const [password,setPassword]=React.useState('');
   // sign-up extra fields
@@ -11129,7 +11138,7 @@ function IntegrationsView({user,db,handleExportData}){
           React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'🔥 Google Ads Lead Capture'),
           React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Capture leads directly from Google Ads Lead Forms. Leads auto-appear in your CRM instantly.')
         ),
-        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Active')
+        React.createElement('span',{style:{background:webhookUrl?'#d8e5df':'#fef3c7',color:webhookUrl?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},webhookUrl?'Active':'Setup Needed')
       ),
 
       React.createElement('div',{style:{background:'#f9f9f9',padding:16,borderRadius:8,marginBottom:16,border:'1px dashed #d5d3cd'}},
@@ -11232,7 +11241,7 @@ function IntegrationsView({user,db,handleExportData}){
         )
       :
         React.createElement('div',{style:{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:8,padding:12}},
-          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Go to Settings → Profile to set up.')
+          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Click "Edit profile" (bottom left) to generate your unique email.')
         )
     )
   );

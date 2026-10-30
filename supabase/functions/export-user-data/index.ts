@@ -64,6 +64,9 @@ Deno.serve(async (req: Request) => {
     }
     console.log(`Starting data export for user: ${userId}`);
 
+    // Create admin client for database access
+    const adminClient = createClient(supabaseUrl, supabaseKey);
+
     // Fetch leads for this user
     const { data: leads, error: leadsError } = await adminClient
       .from("leads")
