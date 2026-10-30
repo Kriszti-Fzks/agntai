@@ -11228,7 +11228,7 @@ function IntegrationsView({user,db,handleExportData}){
       React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
         React.createElement('div',{style:{flex:1}},
           React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'✉️ Email-to-Lead'),
-          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Share your unique email address. Anyone who emails it becomes a lead automatically.')
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},user?.user_metadata?.email_address?'Share your unique email address. Anyone who emails it becomes a lead automatically.':'Get your own unique lead capture email. Share it anywhere — replies auto-create leads with no forms.')
         ),
         React.createElement('span',{style:{background:user?.user_metadata?.email_address?'#d8e5df':'#fef3c7',color:user?.user_metadata?.email_address?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},user?.user_metadata?.email_address?'Active':'Setup Needed')
       ),
@@ -11338,12 +11338,19 @@ function App(){
       } else if(event==='PASSWORD_RECOVERY'&&session?.user){
         setUser(session.user);
         setAuthReady(true);
-      } else if(event==='SIGNED_OUT'||!session){
-        setUser(null);
-        setLeads([]);
-        setTransactions([]);
-        setOnboardStep(null);
-        setView('today');
+      } else if(event==='SIGNED_OUT'||(!session&&event!==undefined)){
+        // Delay sign-out to let Supabase restore session after hard reload
+        setTimeout(()=>{
+          db.auth.getSession().then(({data:{session:restored}})=>{
+            if(!restored?.user){
+              setUser(null);
+              setLeads([]);
+              setTransactions([]);
+              setOnboardStep(null);
+              setView('today');
+            }
+          });
+        },100);
       }
     });
     return ()=>{ subscription.unsubscribe(); };
