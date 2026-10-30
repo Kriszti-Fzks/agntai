@@ -100,29 +100,17 @@ Add these fields to your lead form (in this order):
 
 ## What Happens When a Lead Submits
 
-**Instantly, you get:**
-1. ✉️ **Email notification** (to your agntai email)
-   - Lead name, contact info, property details
-   - Direct link to view in CRM
+**When a Google Ads form is submitted:**
 
-2. 📱 **SMS notification** (if you added your phone to settings)
-   - "🔥 New lead: John Smith (john@example.com)"
-   - Takes leads are hot—this gets you responding in under 5 minutes
-
-3. 🔄 **Lead appears in CRM**
+1. 🔄 **Lead appears in CRM instantly**
    - Stage: New
    - Source: Google Ads
    - All form data pre-filled
    - Tagged with campaign name
 
----
-
-## Settings: Add Your Phone for SMS Alerts
-
-1. In agntai, go to **Settings** → **Profile**
-2. Add your **phone number** in E.164 format: `+1XXXXXXXXXX`
-3. Save
-4. Future Google Ads leads will SMS alert you instantly
+2. 📊 **Track in Analytics**
+   - Go to Integrations → Public API → GET /analytics
+   - See conversion rates and ROI by campaign
 
 ---
 

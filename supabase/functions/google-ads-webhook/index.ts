@@ -128,21 +128,12 @@ Deno.serve(async (req: Request) => {
 
     console.log(`Lead created successfully: ${leadId}`);
 
-    // Send instant notification to agent (SMS + Email)
-    await sendLeadNotifications(
-      agentId,
-      profile,
-      name,
-      leadData.email,
-      leadData.phone,
-      leadData.propertyAddress
-    );
-
     return new Response(
       JSON.stringify({
         success: true,
         message: "Lead captured and stored",
         lead_id: leadId,
+        agent_id: agentId,
       }),
       { status: 200, headers: corsHeaders }
     );
@@ -154,87 +145,3 @@ Deno.serve(async (req: Request) => {
     );
   }
 });
-
-async function sendLeadNotifications(
-  agentId: string,
-  profile: any,
-  leadName: string,
-  leadEmail: string | null,
-  leadPhone: string | null,
-  propertyAddress: string | null
-) {
-  try {
-    const resendApiKey = Deno.env.get("RESEND_API_KEY");
-    const twilioAccountSid = Deno.env.get("TWILIO_ACCOUNT_SID");
-    const twilioAuthToken = Deno.env.get("TWILIO_AUTH_TOKEN");
-    const twilioPhoneNumber = Deno.env.get("TWILIO_PHONE_NUMBER");
-
-    // Send Email Notification
-    if (resendApiKey && profile.email) {
-      try {
-        await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${resendApiKey}`,
-          },
-          body: JSON.stringify({
-            from: "noreply@agntai.app",
-            to: profile.email,
-            subject: `🔥 New Lead from Google Ads: ${leadName}`,
-            html: `
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <div style="background: #1a6b4a; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
-    <h2 style="margin: 0;">🔥 New Lead Captured!</h2>
-  </div>
-  <div style="background: #f5f5f5; padding: 20px; border-radius: 0 0 8px 8px;">
-    <p style="font-size: 16px; color: #1a1916;"><strong>${leadName}</strong></p>
-    ${leadEmail ? `<p style="margin: 8px 0; color: #4b5563;">📧 ${leadEmail}</p>` : ""}
-    ${leadPhone ? `<p style="margin: 8px 0; color: #4b5563;">📱 ${leadPhone}</p>` : ""}
-    ${propertyAddress ? `<p style="margin: 8px 0; color: #4b5563;">🏠 ${propertyAddress}</p>` : ""}
-
-    <div style="background: white; padding: 12px; border-radius: 6px; margin-top: 16px;">
-      <p style="margin: 0; color: #a09d98; font-size: 12px;">Lead captured from Google Ads at ${new Date().toLocaleTimeString()}</p>
-    </div>
-
-    <a href="https://agntai.app" style="display: inline-block; background: #1a6b4a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 16px; font-weight: bold;">View in CRM</a>
-  </div>
-</div>
-            `,
-          }),
-        });
-        console.log("Email notification sent to", profile.email);
-      } catch (emailErr) {
-        console.error("Email notification failed:", emailErr);
-      }
-    }
-
-    // Send SMS Notification (if Twilio configured and agent has phone)
-    if (twilioAccountSid && twilioAuthToken && twilioPhoneNumber && profile.phone) {
-      try {
-        const formData = new URLSearchParams();
-        formData.append("From", twilioPhoneNumber);
-        formData.append("To", profile.phone);
-        formData.append(
-          "Body",
-          `🔥 New lead: ${leadName}${leadEmail ? ` (${leadEmail})` : ""} View in agntai.app`
-        );
-
-        await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`, {
-          method: "POST",
-          headers: {
-            Authorization:
-              "Basic " + btoa(`${twilioAccountSid}:${twilioAuthToken}`),
-          },
-          body: formData,
-        });
-        console.log("SMS notification sent to", profile.phone);
-      } catch (smsErr) {
-        console.error("SMS notification failed:", smsErr);
-      }
-    }
-  } catch (notifErr) {
-    console.error("Notification error:", notifErr);
-    // Don't fail the webhook if notifications fail — lead is already created
-  }
-}

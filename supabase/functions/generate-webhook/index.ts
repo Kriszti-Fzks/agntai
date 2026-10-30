@@ -29,34 +29,55 @@ Deno.serve(async (req: Request) => {
 
     const token = authHeader.replace("Bearer ", "");
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY");
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    if (!supabaseUrl || !supabaseKey) {
+    if (!supabaseUrl || !supabaseServiceKey) {
       return new Response(JSON.stringify({ error: "Server configuration error" }), {
         status: 500,
         headers: corsHeaders,
       });
     }
 
-    // Verify user
-    const userClient = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
+    // Verify user token by checking auth
+    const tempClient = createClient(supabaseUrl, supabaseServiceKey);
+    const { data: tokenData, error: tokenVerifyError } = await tempClient.auth.admin.getUserById(token.split('.')[0]);
 
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
+    if (tokenVerifyError) {
+      // Token format might not work with admin, try direct verification
+      const userClient = createClient(supabaseUrl, supabaseServiceKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const { data: { user }, error: userError } = await userClient.auth.getUser();
 
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Invalid token" }), {
+      if (userError || !user) {
+        return new Response(JSON.stringify({ error: "Invalid token" }), {
+          status: 401,
+          headers: corsHeaders,
+        });
+      }
+    }
+
+    // Extract user ID from token
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return new Response(JSON.stringify({ error: "Invalid token format" }), {
         status: 401,
         headers: corsHeaders,
       });
     }
 
-    const userId = user.id;
-    const adminClient = createClient(
-      supabaseUrl,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
-    );
+    // Decode JWT payload
+    const payload = JSON.parse(atob(parts[1]));
+    const userId = payload.sub;
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "Invalid token: no user ID" }), {
+        status: 401,
+        headers: corsHeaders,
+      });
+    }
+
+    const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
     // Generate secure webhook secret (32 random chars)
     const webhookSecret = generateSecureToken(32);
