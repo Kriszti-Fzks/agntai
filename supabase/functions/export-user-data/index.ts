@@ -30,9 +30,8 @@ Deno.serve(async (req: Request) => {
     const token = authHeader.replace("Bearer ", "");
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
 
-    if (!supabaseUrl || !supabaseKey || !supabaseAnonKey) {
+    if (!supabaseUrl || !supabaseKey) {
       console.error("Missing Supabase environment variables");
       return new Response(JSON.stringify({ error: "Server configuration error" }), {
         status: 500,
@@ -40,45 +39,29 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Create client with service role for admin operations
-    const adminClient = createClient(supabaseUrl, supabaseKey);
-
-    // Verify user token
-    const {
-      data: { user },
-      error: authError,
-    } = await adminClient.auth.admin.getUserById(token.split(".")[0]);
-
-    if (authError) {
-      console.error("Auth error:", authError);
-      return new Response(
-        JSON.stringify({ error: "Invalid authentication token" }),
-        {
-          status: 401,
-          headers: corsHeaders,
-        }
-      );
-    }
-
-    // Try using user client to verify token
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-
-    const {
-      data: { user: tokenUser },
-      error: tokenError,
-    } = await userClient.auth.getUser();
-
-    if (tokenError || !tokenUser) {
-      console.error("Token verification error:", tokenError);
-      return new Response(JSON.stringify({ error: "Invalid token" }), {
+    // Extract user ID from JWT token
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return new Response(JSON.stringify({ error: "Invalid token format" }), {
         status: 401,
         headers: corsHeaders,
       });
     }
 
-    const userId = tokenUser.id;
+    let userId: string;
+    try {
+      const payload = JSON.parse(atob(parts[1]));
+      userId = payload.sub;
+      if (!userId) {
+        throw new Error("No user ID in token");
+      }
+    } catch (e) {
+      console.error("Token decode error:", e);
+      return new Response(JSON.stringify({ error: "Invalid token" }), {
+        status: 401,
+        headers: corsHeaders,
+      });
+    }
     console.log(`Starting data export for user: ${userId}`);
 
     // Fetch leads for this user
