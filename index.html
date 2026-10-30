@@ -11075,23 +11075,31 @@ function IntegrationsView({user,db,handleExportData}){
   const generateWebhook=async()=>{
     try {
       setWebhookLoading(true);
-      const token=(await db.auth.getSession()).data?.session?.access_token;
-      if(!token)return alert('Sign in first');
+      const {data:{session}}=await db.auth.getSession();
+      if(!session)return alert('Sign in first');
 
-      const res=await fetch(`${SUPABASE_URL}/functions/v1/generate-webhook`,{
-        method:'POST',
-        headers:{
-          'Authorization':`Bearer ${token}`,
-          'Content-Type':'application/json'
-        }
-      });
+      const token=session.access_token;
 
-      const data=await res.json();
-      if(data.webhook_url) setWebhookUrl(data.webhook_url);
-      else alert('Failed to generate webhook: '+data.error);
-    }catch(e){
-      console.error(e);
-      alert('Error: '+String(e));
+      // Extract user ID from JWT token
+      const parts=token.split('.');
+      if(parts.length!==3)return alert('Invalid token');
+
+      try {
+        const payload=JSON.parse(atob(parts[1]));
+        const userId=payload.sub;
+        if(!userId)return alert('No user ID in token');
+
+        // Generate random secret (32 chars)
+        const secret=Array.from(crypto.getRandomValues(new Uint8Array(32)))
+          .map(b=>String.fromCharCode((b%36<10?48:87)+b%36))
+          .join('');
+
+        const webhookUrl=`https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/google-ads-webhook/lead/${userId}/${secret}`;
+        setWebhookUrl(webhookUrl);
+      }catch(e){
+        console.error('Token parse error:',e);
+        alert('Error parsing token: '+String(e));
+      }
     }finally{
       setWebhookLoading(false);
     }
