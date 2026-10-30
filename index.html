@@ -3335,7 +3335,7 @@ const STAGE_MAP={
 };
 const HIGH=['Under Contract','Buyer Rep Signed','Listing Agreement Signed','Active Listing','Active Rental Listing','Showing Homes','Showing Rentals','Listing Appointment','Touring Properties','Searching Deals','Rental Evaluation','Application Submitted','Lease Signed'];
 const LOW=['Nurture','Closed'];
-const SORDER={'Under Contract':0,'Buyer Rep Signed':1,'Listing Agreement Signed':2,'Active Listing':3,'Active Rental Listing':4,'Showing Homes':5,'Showing Rentals':6,'Listing Appointment':7,'Touring Properties':8,'Searching Deals':9,'Rental Evaluation':10,'Application Submitted':11,'Lease Signed':12,'Spoke With Lead':13,'Spoke with Lead':13,'Contacted':13.5,'New':14,'Lead':14,'Nurture':15,'Closed':16};
+const SORDER={'Under Contract':0,'Buyer Rep Signed':1,'Listing Agreement Signed':2,'Active Listing':3,'Active Rental Listing':4,'Showing Homes':5,'Showing Rentals':6,'Listing Appointment':7,'Touring Properties':8,'Searching Deals':9,'Rental Evaluation':10,'Application Submitted':11,'Lease Signed':12,'Spoke With Lead':13,'Contacted':13.5,'New':14,'Lead':14,'Nurture':15,'Closed':16};
 const getPri=s=>HIGH.includes(s)?'high':LOW.includes(s)?'low':'medium';
 const sortL=leads=>[...leads].sort((a,b)=>{const po={high:0,medium:1,low:2};const pa=getPri(a.stage),pb=getPri(b.stage);if(po[pa]!==po[pb])return po[pa]-po[pb];return(SORDER[a.stage]??14)-(SORDER[b.stage]??14);});
 const TC={Buyer:'#2563eb',Seller:'#d97706',Tenant:'#7c3aed',Landlord:'#059669',Investor:'#dc2626'};
@@ -3351,7 +3351,7 @@ const PIPE=[
 ];
 const SHOW_S=['Showing Homes','Showing Rentals','Touring Properties','Listing Appointment','Rental Evaluation','Searching Deals','Application Submitted'];
 const OFFER_S=['Buyer Rep Signed','Listing Agreement Signed','Active Listing','Active Rental Listing','Lease Signed'];
-const getPK=s=>s==='New'||s==='Lead'?'New':s==='Contacted'?'Tried':s==='Spoke With Lead'||s==='Spoke with Lead'?'Spoke':SHOW_S.includes(s)?'Showing':OFFER_S.includes(s)?'Offer':s==='Under Contract'?'Contract':s==='Closed'?'Closed':'New';
+const getPK=s=>s==='New'||s==='Lead'?'New':s==='Contacted'?'Tried':s==='Spoke With Lead'||s==='Spoke With Lead'?'Spoke':SHOW_S.includes(s)?'Showing':OFFER_S.includes(s)?'Offer':s==='Under Contract'?'Contract':s==='Closed'?'Closed':'New';
 const daysSince=d=>{if(!d)return null;const diff=Math.floor((new Date()-new Date(d))/(1000*60*60*24));return diff<0?0:diff;};
 const TAGS=['Hot Lead','First-Time Buyer','Luxury','Cash Buyer','Pre-Approved','Investor','Relocation','Motivated Seller','Referral Source','Past Client','Urgent','Rate Sensitive','Move-Up Buyer','Family','STR Strategy'];
 const gcal=(a,n)=>{const d=a.date.replace(/-/g,'');return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.type+' — '+n)}&details=${encodeURIComponent(a.notes||'')}&dates=${d}T090000/${d}T100000`;};
@@ -8063,7 +8063,11 @@ function AuthField({label,type,placeholder,value,onChange,onKeyDown}){
 
 function AuthPage({onAuth}){
   // mode: 'login' | 'signup' | 'forgot' | 'check-email' | 'reset-sent'
-  const [mode,setMode]=React.useState('login');
+  const initialMode=()=>{
+    const params=new URLSearchParams(window.location.search);
+    return params.get('mode')||'login';
+  };
+  const [mode,setMode]=React.useState(initialMode());
   const [email,setEmail]=React.useState('');
   const [password,setPassword]=React.useState('');
   // sign-up extra fields
@@ -11217,7 +11221,7 @@ function IntegrationsView({user,db,handleExportData}){
           React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'✉️ Email-to-Lead'),
           React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Share your unique email address. Anyone who emails it becomes a lead automatically.')
         ),
-        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Active')
+        React.createElement('span',{style:{background:user?.user_metadata?.email_address?'#d8e5df':'#fef3c7',color:user?.user_metadata?.email_address?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},user?.user_metadata?.email_address?'Active':'Setup Needed')
       ),
 
       user?.user_metadata?.email_address?
@@ -11243,6 +11247,12 @@ function App(){
   const NAV_KEY = 'agntai_nav_state_v1';
   const initialNav = (() => {
     try {
+      const params = new URLSearchParams(window.location.search);
+      const urlView = params.get('view');
+      const urlLead = params.get('lead');
+      if (urlView || urlLead) {
+        return { view: urlView || 'today', selId: urlLead || null };
+      }
       const s = sessionStorage.getItem(NAV_KEY);
       return s ? JSON.parse(s) : {};
     } catch(e) { return {}; }
@@ -11271,6 +11281,14 @@ function App(){
         if(el && el.scrollTop !== undefined) el.scrollTop = 0;
       });
     } catch(e) {}
+  }, [view, selId]);
+  React.useEffect(() => {
+    const params = new URLSearchParams();
+    if (view !== 'today') params.set('view', view);
+    if (selId) params.set('lead', selId);
+    const queryStr = params.toString();
+    const newUrl = queryStr ? `${window.location.pathname}?${queryStr}` : window.location.pathname;
+    window.history.replaceState(null, '', newUrl);
   }, [view, selId]);
   const [dbReady,setDbReady]=useState(false);
   const [saving,setSaving]=useState(false);

@@ -141,11 +141,6 @@ Add these fields to your lead form (in this order):
 - URL should start with: `https://ivjdhgyaqbufqtjbqlnu.supabase.co`
 - Copy-paste, don't type
 
-### "Not receiving email/SMS alerts"
-- Email: Check your spam folder + verify email in agntai Settings
-- SMS: Make sure you added your phone number in E.164 format: `+1XXXXXXXXXX`
-- SMS: Twilio may need to be configured (contact support)
-
 ### "Lead form button not showing on my ads"
 - Lead Form Extensions are only available for Search campaigns
 - Extensions take 1-4 hours to show after enabling
