@@ -9460,7 +9460,9 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
       React.createElement('div',{className:'sb-i'+(view==='calendar'?' on':''),onClick:()=>sv('calendar')},'📅',React.createElement('span',{className:'sb-i-text'},' Calendar')),
       React.createElement('div',{className:'sb-i'+(view==='open-houses'?' on':''),onClick:()=>sv('open-houses')},'🏠',React.createElement('span',{className:'sb-i-text'},' Open Houses')),
       React.createElement('div',{className:'sb-i'+(view==='transactions'?' on':''),onClick:()=>sv('transactions')},'📋',React.createElement('span',{className:'sb-i-text'},' Transactions')),
-      React.createElement('div',{className:'sb-i'+(view==='lead-capture-email'?' on':''),onClick:()=>sv('lead-capture-email')},'✉️',React.createElement('span',{className:'sb-i-text'},' Your Lead Capture Email'))
+      React.createElement('div',{className:'sb-i'+(view==='lead-capture-email'?' on':''),onClick:()=>sv('lead-capture-email')},'✉️',React.createElement('span',{className:'sb-i-text'},' Your Lead Capture Email')),
+      React.createElement('span',{className:'sb-lbl',marginTop:'20px'},'Integrations'),
+      React.createElement('div',{className:'sb-i'+(view==='integrations'?' on':''),onClick:()=>sv('integrations')},'🔗',React.createElement('span',{className:'sb-i-text'},' Integrations'))
     ),
     React.createElement('div',{className:'sb-ft'},
       React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
@@ -11065,6 +11067,163 @@ function LeadCaptureEmailView({user,db,meta}){
   );
 }
 
+function IntegrationsView({user,db,handleExportData}){
+  const [webhookUrl,setWebhookUrl]=useState(null);
+  const [webhookLoading,setWebhookLoading]=useState(false);
+  const [copied,setCopied]=useState(false);
+
+  const generateWebhook=async()=>{
+    try {
+      setWebhookLoading(true);
+      const token=(await db.auth.getSession()).data?.session?.access_token;
+      if(!token)return alert('Sign in first');
+
+      const res=await fetch(`${SUPABASE_URL}/functions/v1/generate-webhook`,{
+        method:'POST',
+        headers:{
+          'Authorization':`Bearer ${token}`,
+          'Content-Type':'application/json'
+        }
+      });
+
+      const data=await res.json();
+      if(data.webhook_url) setWebhookUrl(data.webhook_url);
+      else alert('Failed to generate webhook: '+data.error);
+    }catch(e){
+      console.error(e);
+      alert('Error: '+String(e));
+    }finally{
+      setWebhookLoading(false);
+    }
+  };
+
+  const copyToClipboard=()=>{
+    if(!webhookUrl)return;
+    navigator.clipboard.writeText(webhookUrl);
+    setCopied(true);
+    setTimeout(()=>setCopied(false),2000);
+  };
+
+  return React.createElement('div',{style:{padding:'28px',maxWidth:'900px'}},
+    React.createElement('h1',{style:{fontSize:28,fontWeight:700,color:'#1a1916',marginBottom:8}},'🔗 Integrations'),
+    React.createElement('p',{style:{fontSize:14,color:'#6b6760',marginBottom:32,lineHeight:1.6}},'Connect agntai with Google Ads, third-party apps, and measurement tools. Automate lead capture and track ROI.'),
+
+    // Google Ads Integration
+    React.createElement('div',{style:{background:'white',border:'1px solid #e8e6e2',borderRadius:12,padding:24,marginBottom:24}},
+      React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'🔥 Google Ads Lead Capture'),
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Capture leads directly from Google Ads Lead Forms. Leads auto-appear in your CRM with instant SMS/email alerts.')
+        ),
+        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Active')
+      ),
+
+      React.createElement('div',{style:{background:'#f9f9f9',padding:16,borderRadius:8,marginBottom:16,border:'1px dashed #d5d3cd'}},
+        React.createElement('p',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Webhook URL'),
+        webhookUrl?
+          React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+            React.createElement('input',{
+              type:'text',value:webhookUrl,readOnly:true,
+              style:{flex:1,padding:'12px',border:'1px solid #d5d3cd',borderRadius:6,fontSize:12,fontFamily:'monospace',background:'white',color:'#1a1916'}
+            }),
+            React.createElement('button',{
+              onClick:copyToClipboard,
+              style:{padding:'10px 16px',background:copied?'#1a6b4a':'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap',transition:'all 0.2s'}
+            },copied?'✓ Copied':'Copy')
+          )
+        :
+          React.createElement('button',{
+            onClick:generateWebhook,disabled:webhookLoading,
+            style:{padding:'10px 16px',background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:13,fontWeight:600,cursor:webhookLoading?'default':'pointer',opacity:webhookLoading?0.6:1,transition:'all 0.2s'}
+          },webhookLoading?'Generating...':'Generate Webhook URL')
+      ),
+
+      React.createElement('div',{style:{fontSize:12,color:'#6b6760',lineHeight:1.6}},
+        React.createElement('p',{style:{marginBottom:8}},'✅ Setup: '),
+        React.createElement('ol',{style:{marginLeft:20}},
+          React.createElement('li',{style:{marginBottom:6}},'Generate webhook URL above'),
+          React.createElement('li',{style:{marginBottom:6}},'Go to Google Ads → Ad Extensions → Lead Form'),
+          React.createElement('li',{style:{marginBottom:6}},'Paste webhook URL into "HTTP POST webhook" setting'),
+          React.createElement('li',{style:{marginBottom:6}},'Enable on your search campaigns'),
+          React.createElement('li','Leads auto-appear in CRM + get instant SMS/email alerts')
+        )
+      ),
+
+      React.createElement('a',{href:'/GOOGLE_ADS_SETUP.md',target:'_blank',style:{display:'inline-block',marginTop:16,color:'#1a6b4a',textDecoration:'none',fontSize:13,fontWeight:600,borderBottom:'1px solid #1a6b4a'}},'View full setup guide →')
+    ),
+
+    // Public API
+    React.createElement('div',{style:{background:'white',border:'1px solid #e8e6e2',borderRadius:12,padding:24,marginBottom:24}},
+      React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'📡 Public API'),
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Build custom integrations. Query leads, log conversions, track ROI by campaign. REST API with JWT auth.')
+        ),
+        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Live')
+      ),
+
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}},
+        React.createElement('div',{style:{background:'#f9f9f9',padding:12,borderRadius:8,border:'1px solid #e8e6e2'}},
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:6,textTransform:'uppercase'}},'GET /leads'),
+          React.createElement('div',{style:{fontSize:12,color:'#1a1916',lineHeight:1.5}},'Fetch all your leads')
+        ),
+        React.createElement('div',{style:{background:'#f9f9f9',padding:12,borderRadius:8,border:'1px solid #e8e6e2'}},
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:6,textTransform:'uppercase'}},'POST /conversion'),
+          React.createElement('div',{style:{fontSize:12,color:'#1a1916',lineHeight:1.5}},'Log deal closed')
+        ),
+        React.createElement('div',{style:{background:'#f9f9f9',padding:12,borderRadius:8,border:'1px solid #e8e6e2'}},
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:6,textTransform:'uppercase'}},'GET /analytics'),
+          React.createElement('div',{style:{fontSize:12,color:'#1a1916',lineHeight:1.5}},'View ROI by source')
+        )
+      ),
+
+      React.createElement('p',{style:{fontSize:12,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Use with Zapier, Make.com, or build your own integrations.'),
+
+      React.createElement('a',{href:'/PUBLIC_API.md',target:'_blank',style:{display:'inline-block',color:'#1a6b4a',textDecoration:'none',fontSize:13,fontWeight:600,borderBottom:'1px solid #1a6b4a'}},'View API documentation →')
+    ),
+
+    // Data Export
+    React.createElement('div',{style:{background:'white',border:'1px solid #e8e6e2',borderRadius:12,padding:24,marginBottom:24}},
+      React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'💾 Export All Data'),
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Download all your leads, conversation history, and documents as JSON. Your data is yours.')
+        ),
+        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Ready')
+      ),
+
+      React.createElement('button',{
+        onClick:handleExportData,
+        style:{padding:'12px 20px',background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer',transition:'all 0.2s'}
+      },'⬇️ Download Your Data'),
+
+      React.createElement('p',{style:{fontSize:12,color:'#6b6760',marginTop:12,lineHeight:1.6}},'Includes: All leads + full history + documents. File format: JSON. Valid for 24 hours.')
+    ),
+
+    // Email-to-Lead
+    React.createElement('div',{style:{background:'white',border:'1px solid #e8e6e2',borderRadius:12,padding:24}},
+      React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'✉️ Email-to-Lead'),
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},'Share your unique email address. Anyone who emails it becomes a lead automatically.')
+        ),
+        React.createElement('span',{style:{background:'#d8e5df',color:'#1a6b4a',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},'Active')
+      ),
+
+      user?.user_metadata?.email_address?
+        React.createElement('div',{style:{background:'#f9f9f9',padding:16,borderRadius:8,border:'1px dashed #d5d3cd'}},
+          React.createElement('p',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Your Lead Email'),
+          React.createElement('div',{style:{fontSize:14,fontFamily:'monospace',color:'#1a1916',fontWeight:600,wordBreak:'break-all',marginBottom:8}},user.user_metadata.email_address),
+          React.createElement('p',{style:{fontSize:12,color:'#6b6760',lineHeight:1.6}},'Share in: LinkedIn bio, email signature, website, social media. Replies auto-create leads.')
+        )
+      :
+        React.createElement('div',{style:{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:8,padding:12}},
+          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Go to Settings → Profile to set up.')
+        )
+    )
+  );
+}
+
 function App(){
   const [user,setUser]=useState(null);
   const [authReady,setAuthReady]=useState(false);
@@ -11485,6 +11644,7 @@ function App(){
         :view==='transactions'?React.createElement(TransactionView,{leads,user,startWithLead:txStartLead,onStartDone:()=>setTxStartLead(null),onUpdate:()=>dbLoadTransactions().then(d=>setTransactions(d||[]))})
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
         :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta:user?.user_metadata||{}})
+        :view==='integrations'?React.createElement(IntegrationsView,{user,db,handleExportData})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
