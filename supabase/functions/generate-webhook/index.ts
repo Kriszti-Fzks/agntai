@@ -38,26 +38,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Verify user token by checking auth
-    const tempClient = createClient(supabaseUrl, supabaseServiceKey);
-    const { data: tokenData, error: tokenVerifyError } = await tempClient.auth.admin.getUserById(token.split('.')[0]);
-
-    if (tokenVerifyError) {
-      // Token format might not work with admin, try direct verification
-      const userClient = createClient(supabaseUrl, supabaseServiceKey, {
-        global: { headers: { Authorization: `Bearer ${token}` } },
-      });
-      const { data: { user }, error: userError } = await userClient.auth.getUser();
-
-      if (userError || !user) {
-        return new Response(JSON.stringify({ error: "Invalid token" }), {
-          status: 401,
-          headers: corsHeaders,
-        });
-      }
-    }
-
-    // Extract user ID from token
+    // Extract user ID from JWT token
     const parts = token.split('.');
     if (parts.length !== 3) {
       return new Response(JSON.stringify({ error: "Invalid token format" }), {
@@ -66,83 +47,41 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Decode JWT payload
-    const payload = JSON.parse(atob(parts[1]));
-    const userId = payload.sub;
-
-    if (!userId) {
-      return new Response(JSON.stringify({ error: "Invalid token: no user ID" }), {
+    let userId: string;
+    try {
+      const payload = JSON.parse(atob(parts[1]));
+      userId = payload.sub;
+      if (!userId) {
+        throw new Error("No user ID in token");
+      }
+    } catch (e) {
+      console.error("Token decode error:", e);
+      return new Response(JSON.stringify({ error: "Invalid token" }), {
         status: 401,
         headers: corsHeaders,
       });
     }
 
-    const adminClient = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Generate secure webhook secret (32 random chars)
+    // Generate webhook secret
     const webhookSecret = generateSecureToken(32);
+    const supabaseProjectId = "ivjdhgyaqbufqtjbqlnu";
+    const webhookUrl = `https://${supabaseProjectId}.supabase.co/functions/v1/google-ads-webhook/lead/${userId}/${webhookSecret}`;
 
-    // Update or create webhook secret in profiles
-    const { data: profile, error: checkError } = await adminClient
-      .from("profiles")
-      .select("id")
-      .eq("id", userId)
-      .single();
-
-    if (checkError) {
-      console.error("Profile error:", checkError);
-    }
-
-    if (profile) {
-      // Update existing profile
-      const { error: updateError } = await adminClient
-        .from("profiles")
-        .update({
-          webhook_secret: webhookSecret,
-          webhook_enabled: true,
-        })
-        .eq("id", userId);
-
-      if (updateError) {
-        console.error("Update error:", updateError);
-        return new Response(
-          JSON.stringify({ error: "Failed to generate webhook: " + updateError.message }),
-          { status: 500, headers: corsHeaders }
-        );
-      }
-    } else {
-      // Create new profile with webhook
-      const { error: insertError } = await adminClient.from("profiles").insert({
-        id: userId,
-        webhook_secret: webhookSecret,
-        webhook_enabled: true,
-      });
-
-      if (insertError) {
-        console.error("Insert error:", insertError);
-        return new Response(
-          JSON.stringify({ error: "Failed to create webhook: " + insertError.message }),
-          { status: 500, headers: corsHeaders }
-        );
-      }
-    }
-
-    const webhookUrl = `https://ivjdhgyaqbufqtjbqlnu.supabase.co/functions/v1/google-ads-webhook/lead/${userId}/${webhookSecret}`;
+    console.log(`Generated webhook for user ${userId}`);
 
     return new Response(
       JSON.stringify({
         success: true,
         webhook_url: webhookUrl,
         webhook_secret: webhookSecret,
-        instructions:
-          "Copy this URL and paste it into your Google Ads Lead Form settings. Your leads will be automatically added to agntai.",
+        instructions: "Copy this URL and paste it into your Google Ads Lead Form settings.",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Error:", error);
     return new Response(
-      JSON.stringify({ error: "Internal error: " + String(error) }),
+      JSON.stringify({ error: String(error) }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
