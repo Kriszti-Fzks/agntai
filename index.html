@@ -11555,29 +11555,62 @@ function App(){
     setTimeout(()=>setAuthReady(true),100);
   };
 
+  const showToast=(msg,type='success')=>{
+    const id='toast_'+Date.now();
+    const el=document.createElement('div');
+    el.id=id;
+    el.style.cssText=`position:fixed;bottom:20px;right:20px;background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;borderRadius:6px;fontSize:13px;fontWeight:500;zIndex:9999;maxWidth:300px;wordWrap:break-word;`;
+    el.textContent=msg;
+    document.body.appendChild(el);
+    setTimeout(()=>{el.remove();},3000);
+  };
+
+  const handleExportCSV=async()=>{
+    try {
+      if (!user) return showToast('Please sign in first','error');
+      showToast('Preparing CSV export...');
+      const {data:leads} = await db.from('leads').select('*').eq('agent_id', user.id);
+      if (!leads?.length) return showToast('No leads to export','error');
+      const headers=['Name','Email','Phone','Type','Stage','Source','Notes','Last Contact'];
+      const rows=leads.map(l=>[l.name,l.email||'',l.phone||'',l.type,l.stage,l.source,l.notes||'',l.lastContact||'']);
+      const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob=new Blob([csv],{type:'text/csv'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;
+      const now=new Date();
+      const localDate=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+      a.download=`agntai-leads-${localDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`✅ Downloaded ${leads.length} leads`);
+    } catch (err) {
+      console.error('CSV export error:', err);
+      showToast('Export failed: '+String(err),'error');
+    }
+  };
+
   const handleExportData=async()=>{
     try {
-      if (!user) return alert('Please sign in first');
-
-      alert('Preparing your data export... This may take a moment for large datasets.');
-
-      // Client-side export: fetch user's data and download as JSON
+      if (!user) return showToast('Please sign in first','error');
+      showToast('Preparing full data export...');
       const {data:leads} = await db.from('leads').select('*').eq('agent_id', user.id);
-
       const leadIds = leads?.map(l => l.id) || [];
       let communications = [];
       let documents = [];
-
       if (leadIds.length > 0) {
         const {data:comms} = await db.from('communications').select('*').in('lead_id', leadIds);
         const {data:docs} = await db.from('documents').select('*').in('lead_id', leadIds);
         communications = comms || [];
         documents = docs || [];
       }
-
-      // Build export data
+      const now = new Date();
+      const localDate = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+      const localIso = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T' + String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
       const exportData = {
-        exportDate: new Date().toISOString(),
+        exportDate: localIso,
         userId: user.id,
         summary: {
           totalLeads: leads?.length || 0,
@@ -11590,23 +11623,20 @@ function App(){
           documents: documents.filter(d => d.lead_id === lead.id),
         })),
       };
-
-      // Download as JSON
       const json = JSON.stringify(exportData, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `agntai-export-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `agntai-export-${localDate}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-
-      alert(`✅ Export ready!\n\n${exportData.summary.totalLeads} leads, ${exportData.summary.totalCommunications} communications, ${exportData.summary.totalDocuments} documents`);
+      showToast(`✅ Exported ${leads?.length||0} leads, ${communications.length} communications, ${documents.length} documents`);
     } catch (err) {
       console.error('Export error:', err);
-      alert('Export failed: ' + String(err));
+      showToast('Export failed: '+String(err),'error');
     }
   };
 
@@ -11656,7 +11686,7 @@ function App(){
         setView(v); setSelId(null);
         // Note: clicking "AI Assistant" in the sidebar preserves the current
         // conversation. To start fresh, the user taps "🆕 New chat" inside the assistant.
-      },onSignOut:handleSignOut,agentEmail:user?.email,onProfile:()=>setShowProfile(true),onExport:handleExportData,collapsed:sbCollapsed}),
+      },onSignOut:handleSignOut,agentEmail:user?.email,onProfile:()=>setShowProfile(true),onExport:handleExportCSV,collapsed:sbCollapsed}),
       React.createElement('button',{
         className:'sb-float-toggle',
         style:{left:sbCollapsed?52:220},
