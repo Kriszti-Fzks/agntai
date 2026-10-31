@@ -5,10 +5,14 @@ Deno.serve(async (req: Request) => {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
   };
 
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders, status: 200 });
+    return new Response(null, {
+      headers: corsHeaders,
+      status: 200
+    });
   }
 
   if (req.method !== "POST") {
