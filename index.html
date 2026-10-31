@@ -11559,7 +11559,7 @@ function App(){
     const id='toast_'+Date.now();
     const el=document.createElement('div');
     el.id=id;
-    el.style.cssText=`position:fixed;bottom:20px;right:20px;background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;borderRadius:6px;fontSize:13px;fontWeight:500;zIndex:9999;maxWidth:300px;wordWrap:break-word;`;
+    el.style.cssText=`position:fixed;top:20px;right:20px;background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;borderRadius:6px;fontSize:13px;fontWeight:500;zIndex:9999;maxWidth:300px;wordWrap:break-word;`;
     el.textContent=msg;
     document.body.appendChild(el);
     setTimeout(()=>{el.remove();},3000);
@@ -11571,10 +11571,11 @@ function App(){
       showToast('Preparing CSV export...');
       const {data:leads} = await db.from('leads').select('*').eq('agent_id', user.id);
       if (!leads?.length) return showToast('No leads to export','error');
-      const headers=['Name','Email','Phone','Type','Stage','Source','Notes','Last Contact'];
-      const rows=leads.map(l=>[l.name,l.email||'',l.phone||'',l.type,l.stage,l.source,l.notes||'',l.lastContact||'']);
-      const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
-      const blob=new Blob([csv],{type:'text/csv'});
+      const headers=['Name','Email','Phone','Type','Stage','Source','Tags','Notes','Last Contact'];
+      const rows=leads.map(l=>[l.name,l.email||'',l.phone||'',l.type,l.stage,l.source,(l.tags||[]).join('; '),l.notes||'',l.lastContact||'']);
+      const csvContent=[headers,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+      const csv='﻿'+csvContent;
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
       const url=URL.createObjectURL(blob);
       const a=document.createElement('a');
       a.href=url;
