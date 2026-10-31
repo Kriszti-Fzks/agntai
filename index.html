@@ -3345,7 +3345,7 @@ const PIPE=[
   {key:'Tried',label:'Contacted',color:'#a855f7'},
   {key:'Spoke',label:'Spoke With Lead',color:'#f59e0b'},
   {key:'Showing',label:'Showing Homes',color:'#3b82f6'},
-  {key:'Offer',label:'Ready to Offer',color:'#f97316'},
+  {key:'Offer',label:'Active Pipeline',color:'#f97316'},
   {key:'Contract',label:'Under Contract',color:'#10b981'},
   {key:'Nurture',label:'Nurture',color:'#8b5cf6'},
   {key:'Closed',label:'Closed',color:'#1a6b4a'}
@@ -11299,6 +11299,19 @@ function App(){
     const newUrl = queryStr ? `${window.location.pathname}?${queryStr}` : window.location.pathname;
     window.history.pushState(null, '', newUrl);
   }, [view, selId]);
+
+  // Listen for back/forward button and update view/selId from URL
+  React.useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlView = params.get('view') || 'today';
+      const urlLead = params.get('lead') || null;
+      setView(urlView);
+      setSelId(urlLead);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
   const [dbReady,setDbReady]=useState(false);
   const [saving,setSaving]=useState(false);
   const [welcome,setWelcome]=useState(false);
