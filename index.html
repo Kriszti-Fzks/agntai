@@ -11558,35 +11558,52 @@ function App(){
   const handleExportData=async()=>{
     try {
       if (!user) return alert('Please sign in first');
-      const token = (await db.auth.getSession()).data?.session?.access_token;
-      if (!token) return alert('Authentication required');
 
       alert('Preparing your data export... This may take a moment for large datasets.');
 
-      const response = await fetch(
-        `${SUPABASE_URL}/functions/v1/export-user-data`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({}),
-        }
-      );
+      // Client-side export: fetch user's data and download as JSON
+      const {data:leads} = await db.from('leads').select('*').eq('agent_id', user.id);
 
-      const data = await response.json();
-      if (!response.ok) {
-        console.error('Export error:', data);
-        return alert('Export failed: ' + (data.error || 'Unknown error'));
+      const leadIds = leads?.map(l => l.id) || [];
+      let communications = [];
+      let documents = [];
+
+      if (leadIds.length > 0) {
+        const {data:comms} = await db.from('communications').select('*').in('lead_id', leadIds);
+        const {data:docs} = await db.from('documents').select('*').in('lead_id', leadIds);
+        communications = comms || [];
+        documents = docs || [];
       }
 
-      if (data.downloadUrl) {
-        alert(`✅ Export ready!\n\n${data.message}\n\nDownloading...`);
-        window.open(data.downloadUrl, '_blank');
-      } else {
-        alert('Export ready but no download link generated');
-      }
+      // Build export data
+      const exportData = {
+        exportDate: new Date().toISOString(),
+        userId: user.id,
+        summary: {
+          totalLeads: leads?.length || 0,
+          totalCommunications: communications.length,
+          totalDocuments: documents.length,
+        },
+        leads: (leads || []).map(lead => ({
+          ...lead,
+          communications: communications.filter(c => c.lead_id === lead.id),
+          documents: documents.filter(d => d.lead_id === lead.id),
+        })),
+      };
+
+      // Download as JSON
+      const json = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agntai-export-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      alert(`✅ Export ready!\n\n${exportData.summary.totalLeads} leads, ${exportData.summary.totalCommunications} communications, ${exportData.summary.totalDocuments} documents`);
     } catch (err) {
       console.error('Export error:', err);
       alert('Export failed: ' + String(err));
