@@ -6373,7 +6373,7 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
   const srt=sortL(filt);
   const grp=useMemo(()=>{const g={high:[],medium:[],low:[]};srt.forEach(l=>g[getPri(l.stage)].push(l));return g;},[srt]);
   const st={tot:leads.length,h:leads.filter(l=>getPri(l.stage)==='high').length,m:leads.filter(l=>getPri(l.stage)==='medium').length,l:leads.filter(l=>getPri(l.stage)==='low').length};
-  const lbl={high:'Active',medium:'In Progress',low:'Nurture / Closed'};
+  const lbl={high:'Active Deals',medium:'New & Working',low:'Nurture & Closed'};
 
   const toggleSelect=id=>setSelected(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
   const toggleAll=g=>{const ids=g.map(l=>l.id);const allOn=ids.every(id=>selected.includes(id));setSelected(p=>allOn?p.filter(id=>!ids.includes(id)):[...new Set([...p,...ids])]);};
@@ -11266,6 +11266,7 @@ function App(){
       return s ? JSON.parse(s) : {};
     } catch(e) { return {}; }
   })();
+  const isFromPopState = React.useRef(false);
   const [selId,setSelId]=useState(initialNav.selId || null);
   const [showAdd,setShowAdd]=useState(false);
   const [view,setView]=useState(initialNav.view || 'today');
@@ -11291,7 +11292,13 @@ function App(){
       });
     } catch(e) {}
   }, [view, selId]);
+
+  // Update URL when view/selId change, but DON'T if this came from popstate
   React.useEffect(() => {
+    if (isFromPopState.current) {
+      isFromPopState.current = false;
+      return; // Skip pushState, just update the displayed state
+    }
     const params = new URLSearchParams();
     if (view !== 'today') params.set('view', view);
     if (selId) params.set('lead', selId);
@@ -11303,6 +11310,7 @@ function App(){
   // Listen for back/forward button and update view/selId from URL
   React.useEffect(() => {
     const handlePopState = () => {
+      isFromPopState.current = true;
       const params = new URLSearchParams(window.location.search);
       const urlView = params.get('view') || 'today';
       const urlLead = params.get('lead') || null;
