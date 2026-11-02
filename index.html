@@ -822,6 +822,9 @@ function getAgent(user){
     email:user?.email||'',
     gmailAddress:meta.gmail_address||user?.email||'',
     brokerage:meta.brokerage||'',
+    phone:meta.phone||'',
+    // AG-055: real profile name only (never the account email) — used for signatures.
+    profileName:(meta.full_name||'').trim(),
     license:meta.license_number||'',
     emailHandler:meta.email_handler||'gmail_web',
     initials:initials||'RE',
@@ -1686,54 +1689,37 @@ async function callAnthropic(body) {
 
 // ── DAILY AI ACTION LIMIT (20 per user per day for free beta) ──
 async function checkAIActionLimit() {
+  // AG-053: previously used .single() (HTTP 406 when today's row doesn't exist)
+  // and then an insert/update that RLS rejects (403), plus `.catch` on a query
+  // builder. Now: maybeSingle(), every DB error is non-fatal (the AI call still
+  // runs), and only a real "limit reached" stops the call.
+  // Counting needs migration 20261102000000_ai_action_limits_user_write.sql.
+  let session = null;
+  try { ({ data: { session } } = await db.auth.getSession()); } catch(e) {}
+  if (!session) return true;
+  const today = new Date().toISOString().split('T')[0];
+  let row = null;
   try {
-    const { data: { session } } = await db.auth.getSession();
-    if (!session) {
-      console.warn('Cost limit check: not logged in');
-      return true; // Allow call if not logged in (shouldn't happen)
-    }
+    const { data, error } = await db.from('ai_action_limits')
+      .select('count, date').eq('user_id', session.user.id).eq('date', today).maybeSingle();
+    if (error) { console.warn('AI limit check: read failed (ignored)', error.message||error); return true; }
+    row = data;
+  } catch(e) { console.warn('AI limit check: read threw (ignored)', e); return true; }
 
-    const today = new Date().toISOString().split('T')[0];
-    const { data: limits, error } = await db
-      .from('ai_action_limits')
-      .select('count, date')
-      .eq('user_id', session.user.id)
-      .eq('date', today)
-      .single();
-
-    if (error) {
-      // If query fails, silently create a new record
-      const insertErr = await db.from('ai_action_limits').insert({
-        user_id: session.user.id,
-        date: today,
-        count: 1
-      }).then(() => null).catch(e => e);
-
-      if (insertErr) {
-        console.warn('Cost limit check: insert failed', insertErr);
-        // Don't block the AI call
-      }
-      return true;
-    }
-
-    if (limits && limits.count >= 20) {
-      throw new Error("You've hit today's beta limit (20 AI actions). Resets tomorrow.");
-    }
-
-    // Increment counter (non-blocking - don't let this fail the whole call)
-    if (limits) {
-      db.from('ai_action_limits')
-        .update({ count: limits.count + 1 })
-        .eq('user_id', session.user.id)
-        .eq('date', today)
-        .catch(e => console.warn('Cost increment failed:', e));
-    }
-
-    return true;
-  } catch(e) {
-    console.error('Cost limit check error:', e.message);
-    throw e; // Re-throw limit exceeded errors, but not connection errors
+  if (row && row.count >= 20) {
+    throw new Error("You've hit today's beta limit (20 AI actions). Resets tomorrow.");
   }
+  // Count this action — fire and forget, never blocks or throws.
+  (async () => {
+    try {
+      const res = row
+        ? await db.from('ai_action_limits').update({ count: row.count + 1, updated_at: new Date().toISOString() })
+            .eq('user_id', session.user.id).eq('date', today)
+        : await db.from('ai_action_limits').insert({ user_id: session.user.id, date: today, count: 1 });
+      if (res && res.error) console.warn('AI limit count failed (ignored)', res.error.message||res.error);
+    } catch(e) { console.warn('AI limit count threw (ignored)', e); }
+  })();
+  return true;
 }
 
 async function callClaude(prompt, maxTokens=600) {
@@ -1969,7 +1955,13 @@ OUTPUT FORMAT: respond with a JSON array of objects, one per lead, in the same o
     "followUpDraft": "<message to send if the agent says 'no reply yet'>"
   }
 
-Return ONLY the JSON array. No prose, no markdown, no \`\`\`json fences.`;
+Return ONLY the JSON array. No prose, no markdown, no \`\`\`json fences.
+
+${AI_FACT_RULES}
+
+${AI_SIGNATURE_RULES()}
+
+PRIVACY: Leads are batched together only for efficiency. Each lead's decision and draft must use ONLY that lead's own data — never mention or reference another lead, client, transaction or file in any lead's draft or reason.`;
 }
 
 // Run triage on a batch of leads. Returns array of decisions (or empty on error).
@@ -2037,7 +2029,7 @@ async function runDailyTriage(leads, transactions, opts={}) {
   const BATCH_SIZE = 10;
   const today = new Date();
   const nowMs = today.getTime();
-  const agentName = (window._AGENT?.name)||'the agent';
+  const agentName = getAgentSignature().intro; // AG-055: profile name, never the email
   const previousDecisions = opts.previousDecisions || {};
 
   const active = (leads||[]);
@@ -2917,7 +2909,7 @@ function buildProtocolContext(lead, protocol, commHistory) {
   const area = areaMatch?.[0] || (lead.tags||[]).find(t=>t.length>3) || 'your area';
   const draft = step.draftTemplate
     .replace(/\{firstName\}/g, firstName)
-    .replace(/\{agentName\}/g, agent.name)
+    .replace(/\{agentName\}/g, getAgentSignature().name)
     .replace(/\{area\}/g, area)
     .replace(/\{showingDate\}/g, (lead.appointments||[]).slice(-1)[0]?.date ? new Date((lead.appointments||[]).slice(-1)[0].date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) : 'the showing date')
     .replace(/\{numHomes\}/g, String((lead.touredProperties||[]).length || 3))
@@ -3289,16 +3281,50 @@ Reply with ONLY the next step text, nothing else.`;
   return await callClaude(prompt, 80);
 }
 
+// ── AG-055: how the agent signs AI-written messages ─────────────────────────
+// Uses the profile name / brokerage. Never the login email, never "Agntai",
+// never "independent". Falls back to neutral placeholders the agent fills in.
+function getAgentSignature() {
+  const a = window._AGENT || {};
+  const name = (a.profileName || '').trim() || '[Your Name]';
+  const brokerage = (a.brokerage || '').trim();
+  const sig = name + (a.phone ? ' | ' + a.phone : '') + (brokerage ? ' | ' + brokerage : '');
+  const intro = brokerage ? name + ' with ' + brokerage : name;
+  return { name, brokerage, sig, intro };
+}
+const AI_SIGNATURE_RULES = () => {
+  const s = getAgentSignature();
+  return `SIGNATURE / SELF-INTRODUCTION RULES:
+- Introduce yourself as "${s.intro}" and sign as "${s.sig}".
+- NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
+- If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.`;
+};
+// ── AG-054: grounding rules shared by every AI writer ───────────────────────
+const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than being vague):
+- Use ONLY facts explicitly present in the data provided for THIS client. Do not invent or assume anything.
+- Never state that a step is done, passed, removed, signed, sent, approved or "behind us" unless the data explicitly says so. An upcoming deadline means the item is still OPEN.
+- If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
+- Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.`;
+const AI_PRIVACY_RULES = `PRIVACY RULES (critical):
+- This request is about ONE client only. Never mention, compare to, or reveal details about any other client, lead, transaction or file.`;
+
 async function generateAIContent(lead, task, transaction) {
   const agent = window._AGENT;
-  const agentSig = agent.name + (agent.phone ? ' | ' + agent.phone : '') + (agent.brokerage ? ' | ' + agent.brokerage : '');
+  const _sig = getAgentSignature();
+  const agentSig = _sig.sig;
   const commHistory = await dbLoadCommunications(lead.id);
   const ctx = buildLeadContext(lead, transaction, commHistory);
 
   const prompt = `You are an expert real estate agent assistant. Generate outreach for this lead. Be specific, warm, human. Reference their actual situation. Make sure your tone and urgency matches the transaction reality below — if there's a deadline pressure, reflect it.
 
-AGENT: ${agent.name}${agent.brokerage ? ' at ' + agent.brokerage : ''}
+AGENT: ${_sig.intro}
 AGENT SIGNATURE: ${agentSig}
+
+${AI_SIGNATURE_RULES()}
+
+${AI_FACT_RULES}
+
+${AI_PRIVACY_RULES}
 
 LEAD:
 - Name: ${ctx.name} (use first name: ${ctx.firstName})
@@ -3357,7 +3383,8 @@ OUTPUT FORMAT — respond with ONLY this JSON, no other text:
 // and writes a warm, non-desperate release message — not a chase.
 async function generateBreakupText(lead, transaction) {
   const agent = window._AGENT;
-  const agentSig = agent.name + (agent.phone ? ' | ' + agent.phone : '') + (agent.brokerage ? ' | ' + agent.brokerage : '');
+  const _sig = getAgentSignature();
+  const agentSig = _sig.sig;
   const commHistory = await dbLoadCommunications(lead.id);
   const ctx = buildLeadContext(lead, transaction, commHistory);
 
@@ -3370,8 +3397,12 @@ async function generateBreakupText(lead, transaction) {
 
   const prompt = `You are an expert real estate agent coach. This lead has gone silent after ${attempts} contact attempts. Write a warm breakup message — NOT desperate, NOT passive-aggressive. Release pressure so they feel safe responding.
 
-AGENT: ${agent.name}${agent.brokerage ? ' at ' + agent.brokerage : ''}
+AGENT: ${_sig.intro}
 SIGNATURE: ${agentSig}
+
+${AI_SIGNATURE_RULES()}
+
+${AI_FACT_RULES}
 
 LEAD: ${ctx.firstName} | Stage: ${ctx.stage} | No-response attempts: ${attempts}
 Last attempts: ${attemptSummary||'none'}
@@ -3850,6 +3881,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   });
   const [copied, setCopied] = useState(null);
   const [generating, setGenerating] = useState(null);
+  const [aiError, setAiError] = useState({}); // AG-053: per-task AI Write error message
   const [aiContent, setAiContent] = useState({});
   const [editedContent, setEditedContent] = useState({});
   const [openCard, setOpenCard] = useState(null);
@@ -4499,9 +4531,22 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     // Don't auto-expand a channel — let the user pick from the 3 previews
     setActiveTab(p=>({...p,[t.id]:null}));
     const leadTx=(transactions||[]).find(tx=>tx.lead_id===lead.id)||null;
-    const content=await generateAIContent(lead,t,leadTx);
-    if(content)setAiContent(p=>({...p,[t.id]:content}));
-    setGenerating(null);
+    // AG-053: always clear the spinner; time out after 60s; show an error message.
+    setAiError(p=>{const n={...p};delete n[t.id];return n;});
+    try{
+      const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),60000));
+      const content=await Promise.race([generateAIContent(lead,t,leadTx),timeout]);
+      if(content)setAiContent(p=>({...p,[t.id]:content}));
+      else setAiError(p=>({...p,[t.id]:"Couldn't write this message right now. Please try again in a moment."}));
+    }catch(e){
+      const msg=e&&e.message&&e.message.includes('beta limit')?e.message
+        :e&&e.message==='timeout'?'The AI is taking too long. Please try again.'
+        :"Couldn't write this message right now. Please try again in a moment.";
+      console.error('[AI Write] failed',e);
+      setAiError(p=>({...p,[t.id]:msg}));
+    }finally{
+      setGenerating(null);
+    }
   };
 
   // ── CARD ───────────────────────────────────────────────────────────────────
@@ -4855,6 +4900,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
           React.createElement('div',{style:{fontSize:12,color:'#9333ea',marginTop:2}},'For '+(lead?.name?.split(' ')[0]||'this lead'))
         )
       ),
+
+      // AG-053: AI Write error
+      !isGen&&aiError[t.id]&&React.createElement('div',{role:'alert',style:{margin:'10px 0 4px',padding:'10px 12px',background:'#fef2f2',borderRadius:8,border:'1px solid #fca5a5',fontSize:12,color:'#b91c1c'}},'⚠️ '+aiError[t.id]),
 
       // EXPANDED PANEL
       isOpen&&!isGen&&React.createElement('div',{style:{marginTop:10}},
@@ -9666,6 +9714,9 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
 // ── AI ASSISTANT ──────────────────────────────────────────────────────────────
 function AIAssistantView({leads, transactions, communications, onGoToLead}) {
   const {useState, useEffect, useRef, useMemo} = React;
+  // AG-052: full book, used only for general (non-lead) conversations.
+  const allLeads = leads || [];
+  const allTransactions = transactions || [];
   // Persistence — restore the last conversation state so leaving and returning
   // doesn't wipe a draft message or in-progress AI conversation.
   const ASSIST_KEY = 'agntai_assistant_state_v1';
@@ -9965,8 +10016,15 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
   // Implemented as a function so send() can pass freshly-loaded comm data for
   // the current request (the useMemo cached version may be stale by one message
   // if comms changed during the message).
-  const buildSystemContext = React.useCallback((commsMap) => {
+  const buildSystemContext = React.useCallback((commsMap, focusLeadId) => {
     const agent = window._AGENT;
+    // AG-052: when the conversation is about one lead (opened via "Ask AI" on a
+    // lead page / Today card), send ONLY that lead and its transactions so the
+    // model cannot pull other clients into the reply.
+    const focusLead = focusLeadId ? allLeads.find(l => l.id === focusLeadId) : null;
+    const leads = focusLead ? [focusLead] : allLeads;
+    const transactions = focusLead ? allTransactions.filter(tx => tx.lead_id === focusLead.id) : allTransactions;
+    const _sig = getAgentSignature();
     const d = new Date();
     const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     const todayDate = d;
@@ -10038,17 +10096,22 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
       ].filter(Boolean).join('\n    ');
     }).join('\n\n  ');
 
-    return `You are an expert real estate coach and assistant for ${agent.name}${agent.brokerage?' at '+agent.brokerage:''}. Today is ${today}.
+    return `You are an expert real estate coach and assistant for ${_sig.intro}. Today is ${today}.
+${focusLead ? `
+FOCUS: This conversation is about ONE client: ${focusLead.name}. Only this client's data is included below. Do not mention, compare to, or reveal details about any other client, lead or transaction — even if asked to "keep in mind" the rest of the pipeline. If the agent asks about other clients, tell them to start a new conversation.
+` : ''}
+${AI_FACT_RULES}
+
+${AI_SIGNATURE_RULES()}
 
 You have COMPLETE access to the agent's book of business — every lead's profile, stage, notes, AND their full communication history (texts, emails, calls with status: SENT, REPLIED, NO_ANSWER, VOICEMAIL, RECEIVED, etc.). You should USE this depth when answering. Give specific, actionable advice — never generic. Reference client names, exact dates, what was said.
 
 When asked questions like "which leads have I texted but they haven't replied," "show me leads I called yesterday," "who's been silent the longest" — you can answer precisely from the communication history below. NEVER say you don't have access to that data — you do. Each lead's section ends with their communication history.
 
 AGENT PROFILE:
-- Name: ${agent.name}
-- Brokerage: ${agent.brokerage||'independent'}
+- Name: ${_sig.name}
+- Brokerage: ${_sig.brokerage||'not set (do not mention a brokerage)'}
 - Phone: ${agent.phone||'not set'}
-- Email: ${agent.email||'not set'}
 
 LEADS (${leads.length} total):
   ${leadSummaries||'No leads yet'}
@@ -10058,7 +10121,7 @@ ACTIVE TRANSACTIONS (${transactions.filter(t=>t.status!=='closed').length}):
 
 RULES:
 - Be direct and confident — you are a coach, not a yes-man
-- Reference specific leads by name when relevant
+- Reference specific leads by name when relevant${focusLead ? ' (only ' + focusLead.name + ' in this conversation)' : ''}
 - Flag urgency when you see it in the data
 - Keep replies concise unless drafting a document
 - You can suggest they go to a specific lead in the CRM if relevant
@@ -10093,13 +10156,13 @@ NEVER use formats like:
 - Coaching mixed in between the dashes
 
 This format is required so the app can extract just the message for sending. If you violate it, the user can't actually send what you wrote.`;
-  }, [leads, transactions]);
+  }, [allLeads, allTransactions]);
 
   // Memoized system context for normal renders. send() may bypass this and call
   // buildSystemContext directly with freshly-loaded comm data.
   const systemContext = useMemo(
-    () => buildSystemContext(commsByLead),
-    [buildSystemContext, commsByLead]
+    () => buildSystemContext(commsByLead, activeLeadId),
+    [buildSystemContext, commsByLead, activeLeadId]
   );
 
   useEffect(()=>{
@@ -10196,7 +10259,7 @@ This format is required so the app can extract just the message for sending. If 
     setLoading(true);
 
     // Build system context with current lead and communication data
-    const freshSystemContext = buildSystemContext(commsByLead);
+    const freshSystemContext = buildSystemContext(commsByLead, activeLeadId);
 
     // Build conversation history for Claude
     const history = newMessages.map(m=>({role:m.role, content:m.content}));
