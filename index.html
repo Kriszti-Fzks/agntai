@@ -1076,6 +1076,66 @@ async function dbRemoveScheduledTask(leadId, taskId) {
 //   status: 'confirmed' (appointments, deadlines) | 'pending'|'confirmed'|'done'|'dismissed' (tasks)
 // Caller filters/groups as needed. Single source of truth for both the calendar
 // view and the morning scan AI call.
+// AG-044: one source of truth for the user's time zone. Order: explicit
+// preference (agent profile or localStorage 'agntai_tz') → browser zone →
+// America/Los_Angeles. Validated so a bad value can't throw in toLocale*.
+function getUserTimeZone() {
+  const ok = (tz) => { try { if(!tz) return false; new Intl.DateTimeFormat('en-US',{timeZone:tz}); return true; } catch(e){ return false; } };
+  let pref = null;
+  try { pref = (window._AGENT && (window._AGENT.timezone || window._AGENT.time_zone)) || localStorage.getItem('agntai_tz'); } catch(e) {}
+  if(ok(pref)) return pref;
+  let browser = null;
+  try { browser = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e) {}
+  if(ok(browser) && browser !== 'UTC' && browser !== 'Etc/UTC') return browser;
+  return 'America/Los_Angeles';
+}
+function getUserHour(d) {
+  const h = new Intl.DateTimeFormat('en-US',{hour:'numeric',hourCycle:'h23',timeZone:getUserTimeZone()}).format(d||new Date());
+  return parseInt(h,10) % 24;
+}
+
+// AG-043 helper: absolute dates (month name + day, e.g. "Nov 4") found in a
+// lead's Next Step, plus lease-end dates found in Next Step or notes.
+// Relative phrases ("Thursday", "in 3 days") are ignored here because they
+// would drift every day. Returns calendar items with source 'deadline'.
+const _ABS_DATE_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b|\b\d{4}-\d{2}-\d{2}\b/i;
+const _LEASE_RE = /\blease\b[^.;\n]{0,40}\b(end|ends|ending|expire|expires|expiring|expiry|expiration|up)\b/i;
+function _textDeadlinesForLead(lead) {
+  const out = [];
+  const seen = new Set();
+  const add = (m, sourceField) => {
+    if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
+    const isLease = _LEASE_RE.test(m.sentence||'');
+    if(sourceField === 'notes' && !isLease) return; // notes: only lease ends
+    const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
+    if(seen.has(key)) return;
+    seen.add(key);
+    const _clean = (t) => String(t||'').replace(/\s+,/g, ',').replace(/,(?=\S)/g, ', ').replace(/\s{2,}/g,' ').trim();
+    const sentence = _clean(m.sentence);
+    const label = isLease ? 'Lease Ends' : (sentence || 'Deadline').slice(0, 60);
+    out.push({
+      id: 'txt_'+lead.id+'_'+key.replace(/[^a-z0-9]/gi,''),
+      date: m.dateISO,
+      time: m.timeISO || null,
+      source: 'deadline',
+      fromText: sourceField,
+      isLease,
+      status: 'confirmed',
+      type: label,
+      label,
+      notes: sentence,
+      lead,
+      leadId: lead.id,
+      raw: m,
+    });
+  };
+  try {
+    extractDatesFromText(lead.nextStep || '').forEach(m => add(m, 'nextStep'));
+    extractDatesFromText(lead.notes || '').forEach(m => add(m, 'notes'));
+  } catch(e) { console.warn('[AG-043] text deadline scan failed', e); }
+  return out;
+}
+
 function buildCalendarItems(leads, transactions) {
   const items = [];
   (leads||[]).forEach(lead => {
@@ -1113,6 +1173,14 @@ function buildCalendarItems(leads, transactions) {
         raw: t,
       });
     });
+  });
+  // AG-043: leads with NO transaction can still carry a hard date in their
+  // Next Step ("Inspection contingency removal due Nov 4, 2026") or a lease end
+  // in their notes ("lease ends Nov 29"). Surface those as text-derived deadlines.
+  const txLeadIds = new Set((transactions||[]).map(tx => tx.lead_id).filter(Boolean));
+  (leads||[]).forEach(lead => {
+    if(lead.isDemo || txLeadIds.has(lead.id) || lead.stage === 'Closed') return;
+    _textDeadlinesForLead(lead).forEach(it => items.push(it));
   });
   (transactions||[]).forEach(tx => {
     const lead = (leads||[]).find(l => l.id === tx.lead_id);
@@ -4285,11 +4353,54 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       });
     });
 
+    // AG-043: deadlines/lease ends written in Next Step or notes for leads that
+    // have no transaction (transaction leads are handled above).
+    buildCalendarItems(leads, transactions).filter(it => it.fromText).forEach(it => {
+      const lead = it.lead;
+      if(done.includes(lead.id)) return;
+      if(finalTasks.some(t => t.id === it.id || (t.textDeadlines||[]).some(x => x.id === it.id))) return;
+      const diff = Math.round((new Date(it.date+'T12:00:00') - new Date(todayStr+'T12:00:00'))/(1000*60*60*24));
+      const window_ = it.isLease ? 30 : 14;
+      if(diff < 0 || diff > window_) return;
+      const first = lead.name.split(' ')[0];
+      const when = new Date(it.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      const priority = diff===0 ? 'critical' : diff<=3 ? 'urgent' : 'today';
+      const _order={critical:0,urgent:1,today:2,followup:3};
+      // Follow-up 1: if this lead already has a card (AI/protocol), attach the
+      // deadline to it instead of adding a second card; bump its priority if needed.
+      const existing = finalTasks.find(t => t.leadId === lead.id);
+      if(existing) {
+        existing.textDeadlines = [...(existing.textDeadlines||[]), {id: it.id, isLease: it.isLease, when, diff, text: it.isLease ? 'Lease ends' : it.notes}];
+        if((_order[priority]??9) < (_order[existing.priority]??9)) existing.priority = priority;
+        existing.pinned = true;
+        return;
+      }
+      finalTasks.push({
+        pinned: true,
+        id: it.id,
+        isTextDeadline: true,
+        leadId: lead.id, leadName: lead.name, leadType: lead.type,
+        priority, stage: lead.stage,
+        icon: it.isLease ? '🔄' : '⏰',
+        label: (it.isLease ? 'Lease Ends — ' : 'Deadline — ') + when,
+        action: diff===0
+          ? `Due TODAY: ${it.notes}`
+          : `${it.notes} — ${diff} day${diff===1?'':'s'} away (from ${first}'s ${it.fromText==='notes'?'notes':'next step'})`,
+        isProtocol: false,
+        protocolChannel: 'sms',
+        draftText: it.isLease
+          ? `Hey ${first}! Your lease is coming up on ${when} — are you thinking about renewing, or would you like help finding your next place? Happy to help either way! 😊`
+          : `Hi ${first}! Quick reminder — ${it.notes} (${when}). Let me know if you need anything from me before then!`,
+        timingBadge: diff<=0 ? '🔴 Today' : diff<=3 ? '🔴 Urgent' : '🟡 Due Soon',
+      });
+    });
+
     const order={critical:0,urgent:1,today:2,followup:3};
     return finalTasks.sort((a,b)=>(order[a.priority]??99)-(order[b.priority]??99));
   },[leads,commsMap,done,transactions,triageMap,triagePreviousMap,triageRunning,triageLoaded,triageError]);
 
-  const visibleTasks=useMemo(()=>allTasks.slice(0,visibleCount),[allTasks,visibleCount]);
+  // Text deadlines (AG-043) are pinned so they are never paged out when AI tasks load.
+  const visibleTasks=useMemo(()=>{const head=allTasks.slice(0,visibleCount);const extra=allTasks.slice(visibleCount).filter(t=>t.pinned);return head.concat(extra);},[allTasks,visibleCount]);
   const remainingCount=allTasks.length-visibleTasks.length;
 
   const noAnswerCounts=useMemo(()=>{
@@ -4659,6 +4770,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             ),
             React.createElement('div',{className:'tc2-lbl'},t.label),
             React.createElement('div',{className:'tc2-act'},t.action),
+            (t.textDeadlines||[]).map(dl=>React.createElement('div',{key:dl.id,style:{marginTop:5,fontSize:11,fontWeight:600,color:dl.diff<=3?'#dc2626':'#b45309'}},
+              (dl.isLease?'🔄 ':'⏰ ')+dl.text+(String(dl.text).includes(dl.when)||String(dl.text).includes(dl.when.replace(/, \d{4}$/,''))?'':' — '+dl.when)+(dl.diff===0?' (today)':' ('+dl.diff+' day'+(dl.diff===1?'':'s')+')'))),
             t.isProtocol&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:5}},
               React.createElement('span',{style:{fontSize:10,background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:10,padding:'1px 7px',color:'#1a6b4a',fontWeight:600}},
                 (CHAN[t.protocolChannel]||'📋')+' '+t.protocolChannel.toUpperCase()+' · '+t.timingBadge
@@ -4926,7 +5039,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   const isLoading=!commsLoaded&&Object.keys(commsMap).length===0;
 
   // Personalized, time-aware greeting
-  const _hour = new Date().getHours();
+  const _hour = getUserHour();
   const _greeting = _hour < 12 ? 'Good morning' : _hour < 17 ? 'Good afternoon' : 'Good evening';
   const _firstName = (window._AGENT && window._AGENT.name) ? window._AGENT.name.split(' ')[0] : '';
 
@@ -5024,7 +5137,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
                   React.createElement('strong',null,'✨ AI set up your day.'),
                   ' ',Object.keys(triageMap).length+' leads reviewed.',
                   triageTimestamp && React.createElement('span',{style:{color:'#6b6760'}}, ' • Last refreshed: '+
-                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
+                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone()})
                   )
                 )
               : React.createElement('div',null,'Starting AI review…')
@@ -5228,6 +5341,7 @@ const IMPORT_FIELDS = [
   {key:'type',      label:'Type',       required:false, aliases:['type','leadtype','lead type','category','role']},
   {key:'stage',     label:'Stage',      required:false, aliases:['stage','status','pipeline']},
   {key:'source',    label:'Source',     required:false, aliases:['source','leadsource','lead source','origin','referredby','referred by']},
+  {key:'lastContact', label:'Last Contact', required:false, aliases:['last contact','lastcontact','last contacted','last contact date','last touch','last activity']},
   {key:'tags',      label:'Tags',       required:false, aliases:['tags','tag','labels','label','keywords']},
   // Notes is multi: user can map several spreadsheet columns and we'll concatenate.
   // We track the primary "Notes" column here, and also support Background as a separate
@@ -5314,8 +5428,31 @@ function autoMapHeaders(headers, rows){
   // This fixes a bug where "(unnamed)" was matching fullName via the substring "name".
   const isSyntheticHeader = h => !h || /^column\s*\d+$/i.test(h) || h === '(unnamed)';
 
+  // Pass 0: exact header matches for ALL single fields first, so e.g. "Last Contact"
+  // goes to Last Contact before Last Name's short alias "last" can grab it.
+  for(const f of IMPORT_FIELDS){
+    if(f.multi) continue;
+    for(const a of f.aliases){
+      const na = norm(a);
+      const i = normedHeaders.findIndex((h,j)=>!used.has(j) && !isSyntheticHeader(headers[j]) && h===na);
+      if(i>=0){ map[f.key] = headers[i]; used.add(i); break; }
+    }
+  }
+  // Pass 0b: "contains" matches for single fields, longest alias wins globally.
+  const _cands = [];
+  for(const f of IMPORT_FIELDS){
+    if(f.multi || map[f.key]) continue;
+    for(const a of f.aliases){
+      const na = norm(a);
+      normedHeaders.forEach((h,j)=>{ if(h && !used.has(j) && !isSyntheticHeader(headers[j]) && h.includes(na)) _cands.push({key:f.key, j, len:na.length}); });
+    }
+  }
+  _cands.sort((x,y)=>y.len-x.len);
+  for(const c of _cands){ if(map[c.key] || used.has(c.j)) continue; map[c.key]=headers[c.j]; used.add(c.j); }
+
   // Pass 1: header name matching (skip synthetic headers)
   for(const f of IMPORT_FIELDS){
+    if(!f.multi && map[f.key]) continue;
     if(f.multi){
       // Multi-mappable field: collect ALL columns whose header matches any alias.
       // E.g. for notes, grab both "Notes" and "Comments" if both exist.
@@ -5428,7 +5565,15 @@ function parseExcelBuffer(buf){
 
 // Build lead objects from { headers, rows } using a column mapping.
 // Mapping values can be a string (single column) or an array (multi-column, e.g. notes).
-// Also returns errors and dedupes against existing leads (by email or phone).
+// Also returns errors and dedupes against existing leads (by email, or by name+phone).
+function _importDate(raw){
+  if(!raw) return '';
+  const t=String(raw).trim();
+  let m=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m){const y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');}
+  const d=new Date(t); if(isNaN(d)) return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
 function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
   // Build idx[key] = index OR idx[key] = [index, index, ...] for multi-mapped fields.
   const idx = {};
@@ -5463,9 +5608,13 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
     return String(raw).split(/[,;|]/).map(t => t.trim()).filter(Boolean);
   };
   const existingEmails = new Set((existingLeads||[]).map(l=>(l.email||'').toLowerCase().trim()).filter(Boolean));
-  const existingPhones = new Set((existingLeads||[]).map(l=>String(l.phone||'').replace(/\D/g,'')).filter(p=>p.length>=7));
+  // AG-042: phone alone is NOT a duplicate (shared family/office numbers). A row is a
+  // duplicate only when the email matches, or when BOTH name and phone match.
+  const _nk = (n) => String(n||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const _np = (p) => String(p||'').replace(/\D/g,'').slice(-10);
+  const existingNamePhones = new Set((existingLeads||[]).map(l=>{const d=_np(l.phone);return d.length>=7&&_nk(l.name)?_nk(l.name)+'|'+d:'';}).filter(Boolean));
   const seenEmails = new Set();
-  const seenPhones = new Set();
+  const seenNamePhones = new Set();
   const leads = [];
   const errors = [];
   const skippedDupes = [];
@@ -5493,12 +5642,13 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       skippedDupes.push({row:rowNum, name, reason:'duplicate email'});
       return;
     }
-    if(phoneDigits.length>=7 && (existingPhones.has(phoneDigits) || seenPhones.has(phoneDigits))){
-      skippedDupes.push({row:rowNum, name, reason:'duplicate phone'});
+    const namePhoneKey = phoneDigits.length>=7 ? _nk(name)+'|'+_np(phoneDigits) : '';
+    if(namePhoneKey && (existingNamePhones.has(namePhoneKey) || seenNamePhones.has(namePhoneKey))){
+      skippedDupes.push({row:rowNum, name, reason:'duplicate name + phone'});
       return;
     }
     if(email) seenEmails.add(email);
-    if(phoneDigits.length>=7) seenPhones.add(phoneDigits);
+    if(namePhoneKey) seenNamePhones.add(namePhoneKey);
     // Combine notes from possibly multiple columns + background.
     // We label background separately so the AI can distinguish "background context" from "notes".
     const notesParts = getAll(row,'notes');
@@ -5518,13 +5668,18 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       type: normalizeType(get(row,'type')),
       stage: get(row,'stage') || 'New',
       source: get(row,'source') || 'Other',
-      lastContact: new Date().toISOString().slice(0,10),
+      // Only set when the spreadsheet provides it (mapped 'lastContact' column).
+      lastContact: _importDate(get(row,'lastContact')),
       notes: finalNotes,
       nextStep: 'Follow up — imported from spreadsheet',
       completedSteps: [],
       tags: allTags,
-      properties_shared:[], interested_properties:[], toured_properties:[],
-      appointments:[], documents:[],
+      // Same array defaults as dbLoadLeads (camelCase) so LeadDetail can open
+      // a freshly imported lead without a reload.
+      propertiesShared:[], interestedProperties:[], touredProperties:[],
+      appointments:[], documents:[], scheduledTasks:[], activityLog:[],
+      activeProtocolId:null, protocolStep:0, protocolStartedAt:null,
+      sphereCategory:null, isDemo:false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -7462,7 +7617,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
               },'Cancel')
             )
           ),
-          React.createElement('div',{style:{marginTop:10}},React.createElement(TagInput,{tags:lead.tags,onChange:t=>onUpd({...lead,tags:t})}))
+          React.createElement('div',{style:{marginTop:10}},React.createElement(TagInput,{tags:lead.tags||[],onChange:t=>onUpd({...lead,tags:t})}))
         )
       ),
       React.createElement('div',{className:'hr'},
@@ -7666,14 +7821,14 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
       }),
       React.createElement(Sec,{title:'Appointments',ic:'📅',ch:React.createElement(React.Fragment,null,
         React.createElement('div',{className:'il'},
-          !lead.appointments.length&&React.createElement('p',{className:'em2'},'No appointments yet'),
-          ...lead.appointments.map(a=>React.createElement('div',{key:a.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',{style:{flex:1}},React.createElement('div',{className:'lit'},React.createElement('span',null,a.type,' — ',React.createElement('span',{className:'lid'},fmt(a.date))),React.createElement('a',{className:'gb',href:gcal(a,lead.name),target:'_blank',rel:'noreferrer'},'📅 Add to Google Cal')),a.notes&&React.createElement('div',{className:'lin'},a.notes))))
+          !(lead.appointments||[]).length&&React.createElement('p',{className:'em2'},'No appointments yet'),
+          ...(lead.appointments||[]).map(a=>React.createElement('div',{key:a.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',{style:{flex:1}},React.createElement('div',{className:'lit'},React.createElement('span',null,a.type,' — ',React.createElement('span',{className:'lid'},fmt(a.date))),React.createElement('a',{className:'gb',href:gcal(a,lead.name),target:'_blank',rel:'noreferrer'},'📅 Add to Google Cal')),a.notes&&React.createElement('div',{className:'lin'},a.notes))))
         ),
         aA?React.createElement(AppointmentForm,{lead,onUpd,onClose:()=>setAA(false)})
         :React.createElement('button',{className:'ab',onClick:()=>setAA(true)},'+ Add Appointment')
       )}),
       React.createElement(Sec,{title:'Properties Shared',ic:'🏠',ch:React.createElement(React.Fragment,null,
-        React.createElement('div',{className:'il'},!lead.propertiesShared.length&&React.createElement('p',{className:'em2'},'No properties shared yet'),...lead.propertiesShared.map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.dateShared&&React.createElement('div',{className:'lid'},'Shared ',fmt(x.dateShared)),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
+        React.createElement('div',{className:'il'},!(lead.propertiesShared||[]).length&&React.createElement('p',{className:'em2'},'No properties shared yet'),...(lead.propertiesShared||[]).map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.dateShared&&React.createElement('div',{className:'lid'},'Shared ',fmt(x.dateShared)),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
         aP?React.createElement('div',{className:'af'},
           React.createElement('input',{className:'ai',placeholder:'Listing URL — Zillow, Redfin, MLS... (required)',value:pu,onChange:e=>setPu(e.target.value)}),
           React.createElement('input',{className:'ai',placeholder:'Quick note (optional) — e.g. too small, great yard',value:pn,onChange:e=>setPn(e.target.value)}),
@@ -7681,7 +7836,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
         :React.createElement('button',{className:'ab',onClick:()=>setAP(true)},'+ Add Property')
       )}),
       React.createElement(Sec,{title:'Interested Properties',ic:'❤️',ch:React.createElement(React.Fragment,null,
-        React.createElement('div',{className:'il'},!lead.interestedProperties.length&&React.createElement('p',{className:'em2'},'No interested properties yet'),...lead.interestedProperties.map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot r'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
+        React.createElement('div',{className:'il'},!(lead.interestedProperties||[]).length&&React.createElement('p',{className:'em2'},'No interested properties yet'),...(lead.interestedProperties||[]).map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot r'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
         aI?React.createElement('div',{className:'af'},
           React.createElement('input',{className:'ai',placeholder:'Listing URL — Zillow, Redfin, MLS... (required)',value:iu,onChange:e=>setIu(e.target.value)}),
           React.createElement('input',{className:'ai',placeholder:'Quick note (optional) — e.g. loved the backyard',value:ino,onChange:e=>setIno(e.target.value)}),
@@ -7897,7 +8052,7 @@ function CalView({leads,transactions,onSel,onTaskAction}){
     }
     const titleParts = [item.label, '— '+item.lead.name];
     if(item.source==='task' && item.status==='pending') titleParts.push('(AI suggested — pending confirmation)');
-    if(item.source==='deadline') titleParts.push('(transaction deadline)');
+    if(item.source==='deadline') titleParts.push(item.fromText ? '(from lead '+(item.fromText==='notes'?'notes':'next step')+')' : '(transaction deadline)');
     return React.createElement('div',{
       key:item.id,
       className:cls,
@@ -11529,7 +11684,9 @@ function App(){
   const add=async l=>{
     // Default sphere contacts to category B when first added
     const withSphereDefault = (l.source==='SOI' && !l.sphereCategory) ? {...l, sphereCategory:'B'} : l;
+    const _arr=['tags','propertiesShared','interestedProperties','touredProperties','appointments','documents','scheduledTasks','completedSteps','activityLog'];
     const wl={...withSphereDefault,agent_id:user?.id};
+    _arr.forEach(k=>{ if(!Array.isArray(wl[k])) wl[k]=[]; });
     setLeads(prev=>[wl,...prev]);
     setSaving(true);
 
