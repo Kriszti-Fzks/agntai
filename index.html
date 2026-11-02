@@ -1076,6 +1076,64 @@ async function dbRemoveScheduledTask(leadId, taskId) {
 //   status: 'confirmed' (appointments, deadlines) | 'pending'|'confirmed'|'done'|'dismissed' (tasks)
 // Caller filters/groups as needed. Single source of truth for both the calendar
 // view and the morning scan AI call.
+// AG-044: one source of truth for the user's time zone. Order: explicit
+// preference (agent profile or localStorage 'agntai_tz') → browser zone →
+// America/Los_Angeles. Validated so a bad value can't throw in toLocale*.
+function getUserTimeZone() {
+  const ok = (tz) => { try { if(!tz) return false; new Intl.DateTimeFormat('en-US',{timeZone:tz}); return true; } catch(e){ return false; } };
+  let pref = null;
+  try { pref = (window._AGENT && (window._AGENT.timezone || window._AGENT.time_zone)) || localStorage.getItem('agntai_tz'); } catch(e) {}
+  if(ok(pref)) return pref;
+  let browser = null;
+  try { browser = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e) {}
+  if(ok(browser) && browser !== 'UTC' && browser !== 'Etc/UTC') return browser;
+  return 'America/Los_Angeles';
+}
+function getUserHour(d) {
+  const h = new Intl.DateTimeFormat('en-US',{hour:'numeric',hourCycle:'h23',timeZone:getUserTimeZone()}).format(d||new Date());
+  return parseInt(h,10) % 24;
+}
+
+// AG-043 helper: absolute dates (month name + day, e.g. "Nov 4") found in a
+// lead's Next Step, plus lease-end dates found in Next Step or notes.
+// Relative phrases ("Thursday", "in 3 days") are ignored here because they
+// would drift every day. Returns calendar items with source 'deadline'.
+const _ABS_DATE_RE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b|\b\d{4}-\d{2}-\d{2}\b/i;
+const _LEASE_RE = /\blease\b[^.;\n]{0,40}\b(end|ends|ending|expire|expires|expiring|expiry|expiration|up)\b/i;
+function _textDeadlinesForLead(lead) {
+  const out = [];
+  const seen = new Set();
+  const add = (m, sourceField) => {
+    if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
+    const isLease = _LEASE_RE.test(m.sentence||'');
+    if(sourceField === 'notes' && !isLease) return; // notes: only lease ends
+    const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
+    if(seen.has(key)) return;
+    seen.add(key);
+    const label = isLease ? 'Lease Ends' : (m.sentence || 'Deadline').replace(/\s+,/g, ',').replace(/,(\d{4})/g, ', $1').slice(0, 60);
+    out.push({
+      id: 'txt_'+lead.id+'_'+key.replace(/[^a-z0-9]/gi,''),
+      date: m.dateISO,
+      time: m.timeISO || null,
+      source: 'deadline',
+      fromText: sourceField,
+      isLease,
+      status: 'confirmed',
+      type: label,
+      label,
+      notes: m.sentence || '',
+      lead,
+      leadId: lead.id,
+      raw: m,
+    });
+  };
+  try {
+    extractDatesFromText(lead.nextStep || '').forEach(m => add(m, 'nextStep'));
+    extractDatesFromText(lead.notes || '').forEach(m => add(m, 'notes'));
+  } catch(e) { console.warn('[AG-043] text deadline scan failed', e); }
+  return out;
+}
+
 function buildCalendarItems(leads, transactions) {
   const items = [];
   (leads||[]).forEach(lead => {
@@ -1113,6 +1171,14 @@ function buildCalendarItems(leads, transactions) {
         raw: t,
       });
     });
+  });
+  // AG-043: leads with NO transaction can still carry a hard date in their
+  // Next Step ("Inspection contingency removal due Nov 4, 2026") or a lease end
+  // in their notes ("lease ends Nov 29"). Surface those as text-derived deadlines.
+  const txLeadIds = new Set((transactions||[]).map(tx => tx.lead_id).filter(Boolean));
+  (leads||[]).forEach(lead => {
+    if(lead.isDemo || txLeadIds.has(lead.id) || lead.stage === 'Closed') return;
+    _textDeadlinesForLead(lead).forEach(it => items.push(it));
   });
   (transactions||[]).forEach(tx => {
     const lead = (leads||[]).find(l => l.id === tx.lead_id);
@@ -4285,6 +4351,37 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       });
     });
 
+    // AG-043: deadlines/lease ends written in Next Step or notes for leads that
+    // have no transaction (transaction leads are handled above).
+    buildCalendarItems(leads, transactions).filter(it => it.fromText).forEach(it => {
+      const lead = it.lead;
+      if(done.includes(lead.id)) return;
+      if(finalTasks.some(t => t.id === it.id)) return;
+      const diff = Math.round((new Date(it.date+'T12:00:00') - new Date(todayStr+'T12:00:00'))/(1000*60*60*24));
+      const window_ = it.isLease ? 30 : 14;
+      if(diff < 0 || diff > window_) return;
+      const first = lead.name.split(' ')[0];
+      const when = new Date(it.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      const priority = diff===0 ? 'critical' : diff<=3 ? 'urgent' : diff<=14 ? 'today' : 'followup';
+      finalTasks.push({
+        id: it.id,
+        isTextDeadline: true,
+        leadId: lead.id, leadName: lead.name, leadType: lead.type,
+        priority, stage: lead.stage,
+        icon: it.isLease ? '🔄' : '⏰',
+        label: (it.isLease ? 'Lease Ends — ' : 'Deadline — ') + when,
+        action: diff===0
+          ? `Due TODAY: ${it.notes}`
+          : `${it.notes} — ${diff} day${diff===1?'':'s'} away (from ${first}'s ${it.fromText==='notes'?'notes':'next step'})`,
+        isProtocol: false,
+        protocolChannel: 'sms',
+        draftText: it.isLease
+          ? `Hey ${first}! Your lease is coming up on ${when} — are you thinking about renewing, or would you like help finding your next place? Happy to help either way! 😊`
+          : `Hi ${first}! Quick reminder — ${it.notes} (${when}). Let me know if you need anything from me before then!`,
+        timingBadge: diff<=0 ? '🔴 Today' : diff<=3 ? '🔴 Urgent' : '🟡 Due Soon',
+      });
+    });
+
     const order={critical:0,urgent:1,today:2,followup:3};
     return finalTasks.sort((a,b)=>(order[a.priority]??99)-(order[b.priority]??99));
   },[leads,commsMap,done,transactions,triageMap,triagePreviousMap,triageRunning,triageLoaded,triageError]);
@@ -4926,7 +5023,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   const isLoading=!commsLoaded&&Object.keys(commsMap).length===0;
 
   // Personalized, time-aware greeting
-  const _hour = new Date().getHours();
+  const _hour = getUserHour();
   const _greeting = _hour < 12 ? 'Good morning' : _hour < 17 ? 'Good afternoon' : 'Good evening';
   const _firstName = (window._AGENT && window._AGENT.name) ? window._AGENT.name.split(' ')[0] : '';
 
@@ -5024,7 +5121,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
                   React.createElement('strong',null,'✨ AI set up your day.'),
                   ' ',Object.keys(triageMap).length+' leads reviewed.',
                   triageTimestamp && React.createElement('span',{style:{color:'#6b6760'}}, ' • Last refreshed: '+
-                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
+                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone()})
                   )
                 )
               : React.createElement('div',null,'Starting AI review…')
@@ -5428,7 +5525,7 @@ function parseExcelBuffer(buf){
 
 // Build lead objects from { headers, rows } using a column mapping.
 // Mapping values can be a string (single column) or an array (multi-column, e.g. notes).
-// Also returns errors and dedupes against existing leads (by email or phone).
+// Also returns errors and dedupes against existing leads (by email, or by name+phone).
 function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
   // Build idx[key] = index OR idx[key] = [index, index, ...] for multi-mapped fields.
   const idx = {};
@@ -5463,9 +5560,13 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
     return String(raw).split(/[,;|]/).map(t => t.trim()).filter(Boolean);
   };
   const existingEmails = new Set((existingLeads||[]).map(l=>(l.email||'').toLowerCase().trim()).filter(Boolean));
-  const existingPhones = new Set((existingLeads||[]).map(l=>String(l.phone||'').replace(/\D/g,'')).filter(p=>p.length>=7));
+  // AG-042: phone alone is NOT a duplicate (shared family/office numbers). A row is a
+  // duplicate only when the email matches, or when BOTH name and phone match.
+  const _nk = (n) => String(n||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const _np = (p) => String(p||'').replace(/\D/g,'').slice(-10);
+  const existingNamePhones = new Set((existingLeads||[]).map(l=>{const d=_np(l.phone);return d.length>=7&&_nk(l.name)?_nk(l.name)+'|'+d:'';}).filter(Boolean));
   const seenEmails = new Set();
-  const seenPhones = new Set();
+  const seenNamePhones = new Set();
   const leads = [];
   const errors = [];
   const skippedDupes = [];
@@ -5493,12 +5594,13 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       skippedDupes.push({row:rowNum, name, reason:'duplicate email'});
       return;
     }
-    if(phoneDigits.length>=7 && (existingPhones.has(phoneDigits) || seenPhones.has(phoneDigits))){
-      skippedDupes.push({row:rowNum, name, reason:'duplicate phone'});
+    const namePhoneKey = phoneDigits.length>=7 ? _nk(name)+'|'+_np(phoneDigits) : '';
+    if(namePhoneKey && (existingNamePhones.has(namePhoneKey) || seenNamePhones.has(namePhoneKey))){
+      skippedDupes.push({row:rowNum, name, reason:'duplicate name + phone'});
       return;
     }
     if(email) seenEmails.add(email);
-    if(phoneDigits.length>=7) seenPhones.add(phoneDigits);
+    if(namePhoneKey) seenNamePhones.add(namePhoneKey);
     // Combine notes from possibly multiple columns + background.
     // We label background separately so the AI can distinguish "background context" from "notes".
     const notesParts = getAll(row,'notes');
@@ -7897,7 +7999,7 @@ function CalView({leads,transactions,onSel,onTaskAction}){
     }
     const titleParts = [item.label, '— '+item.lead.name];
     if(item.source==='task' && item.status==='pending') titleParts.push('(AI suggested — pending confirmation)');
-    if(item.source==='deadline') titleParts.push('(transaction deadline)');
+    if(item.source==='deadline') titleParts.push(item.fromText ? '(from lead '+(item.fromText==='notes'?'notes':'next step')+')' : '(transaction deadline)');
     return React.createElement('div',{
       key:item.id,
       className:cls,
