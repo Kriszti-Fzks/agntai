@@ -1110,7 +1110,9 @@ function _textDeadlinesForLead(lead) {
     const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
     if(seen.has(key)) return;
     seen.add(key);
-    const label = isLease ? 'Lease Ends' : (m.sentence || 'Deadline').replace(/\s+,/g, ',').replace(/,(\d{4})/g, ', $1').slice(0, 60);
+    const _clean = (t) => String(t||'').replace(/\s+,/g, ',').replace(/,(?=\S)/g, ', ').replace(/\s{2,}/g,' ').trim();
+    const sentence = _clean(m.sentence);
+    const label = isLease ? 'Lease Ends' : (sentence || 'Deadline').slice(0, 60);
     out.push({
       id: 'txt_'+lead.id+'_'+key.replace(/[^a-z0-9]/gi,''),
       date: m.dateISO,
@@ -1121,7 +1123,7 @@ function _textDeadlinesForLead(lead) {
       status: 'confirmed',
       type: label,
       label,
-      notes: m.sentence || '',
+      notes: sentence,
       lead,
       leadId: lead.id,
       raw: m,
@@ -4356,14 +4358,25 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     buildCalendarItems(leads, transactions).filter(it => it.fromText).forEach(it => {
       const lead = it.lead;
       if(done.includes(lead.id)) return;
-      if(finalTasks.some(t => t.id === it.id)) return;
+      if(finalTasks.some(t => t.id === it.id || (t.textDeadlines||[]).some(x => x.id === it.id))) return;
       const diff = Math.round((new Date(it.date+'T12:00:00') - new Date(todayStr+'T12:00:00'))/(1000*60*60*24));
       const window_ = it.isLease ? 30 : 14;
       if(diff < 0 || diff > window_) return;
       const first = lead.name.split(' ')[0];
       const when = new Date(it.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-      const priority = diff===0 ? 'critical' : diff<=3 ? 'urgent' : diff<=14 ? 'today' : 'followup';
+      const priority = diff===0 ? 'critical' : diff<=3 ? 'urgent' : 'today';
+      const _order={critical:0,urgent:1,today:2,followup:3};
+      // Follow-up 1: if this lead already has a card (AI/protocol), attach the
+      // deadline to it instead of adding a second card; bump its priority if needed.
+      const existing = finalTasks.find(t => t.leadId === lead.id);
+      if(existing) {
+        existing.textDeadlines = [...(existing.textDeadlines||[]), {id: it.id, isLease: it.isLease, when, diff, text: it.isLease ? 'Lease ends' : it.notes}];
+        if((_order[priority]??9) < (_order[existing.priority]??9)) existing.priority = priority;
+        existing.pinned = true;
+        return;
+      }
       finalTasks.push({
+        pinned: true,
         id: it.id,
         isTextDeadline: true,
         leadId: lead.id, leadName: lead.name, leadType: lead.type,
@@ -4386,7 +4399,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     return finalTasks.sort((a,b)=>(order[a.priority]??99)-(order[b.priority]??99));
   },[leads,commsMap,done,transactions,triageMap,triagePreviousMap,triageRunning,triageLoaded,triageError]);
 
-  const visibleTasks=useMemo(()=>allTasks.slice(0,visibleCount),[allTasks,visibleCount]);
+  // Text deadlines (AG-043) are pinned so they are never paged out when AI tasks load.
+  const visibleTasks=useMemo(()=>{const head=allTasks.slice(0,visibleCount);const extra=allTasks.slice(visibleCount).filter(t=>t.pinned);return head.concat(extra);},[allTasks,visibleCount]);
   const remainingCount=allTasks.length-visibleTasks.length;
 
   const noAnswerCounts=useMemo(()=>{
@@ -4756,6 +4770,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             ),
             React.createElement('div',{className:'tc2-lbl'},t.label),
             React.createElement('div',{className:'tc2-act'},t.action),
+            (t.textDeadlines||[]).map(dl=>React.createElement('div',{key:dl.id,style:{marginTop:5,fontSize:11,fontWeight:600,color:dl.diff<=3?'#dc2626':'#b45309'}},
+              (dl.isLease?'🔄 ':'⏰ ')+dl.text+' — '+dl.when+(dl.diff===0?' (today)':' ('+dl.diff+' day'+(dl.diff===1?'':'s')+')'))),
             t.isProtocol&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:5}},
               React.createElement('span',{style:{fontSize:10,background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:10,padding:'1px 7px',color:'#1a6b4a',fontWeight:600}},
                 (CHAN[t.protocolChannel]||'📋')+' '+t.protocolChannel.toUpperCase()+' · '+t.timingBadge
@@ -5325,6 +5341,7 @@ const IMPORT_FIELDS = [
   {key:'type',      label:'Type',       required:false, aliases:['type','leadtype','lead type','category','role']},
   {key:'stage',     label:'Stage',      required:false, aliases:['stage','status','pipeline']},
   {key:'source',    label:'Source',     required:false, aliases:['source','leadsource','lead source','origin','referredby','referred by']},
+  {key:'lastContact', label:'Last Contact', required:false, aliases:['last contact','lastcontact','last contacted','last contact date','last touch','last activity']},
   {key:'tags',      label:'Tags',       required:false, aliases:['tags','tag','labels','label','keywords']},
   // Notes is multi: user can map several spreadsheet columns and we'll concatenate.
   // We track the primary "Notes" column here, and also support Background as a separate
@@ -5526,6 +5543,14 @@ function parseExcelBuffer(buf){
 // Build lead objects from { headers, rows } using a column mapping.
 // Mapping values can be a string (single column) or an array (multi-column, e.g. notes).
 // Also returns errors and dedupes against existing leads (by email, or by name+phone).
+function _importDate(raw){
+  if(!raw) return '';
+  const t=String(raw).trim();
+  let m=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m){const y=m[3].length===2?'20'+m[3]:m[3];return y+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');}
+  const d=new Date(t); if(isNaN(d)) return '';
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
 function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
   // Build idx[key] = index OR idx[key] = [index, index, ...] for multi-mapped fields.
   const idx = {};
@@ -5620,7 +5645,8 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       type: normalizeType(get(row,'type')),
       stage: get(row,'stage') || 'New',
       source: get(row,'source') || 'Other',
-      lastContact: new Date().toISOString().slice(0,10),
+      // Only set when the spreadsheet provides it (mapped 'lastContact' column).
+      lastContact: _importDate(get(row,'lastContact')),
       notes: finalNotes,
       nextStep: 'Follow up — imported from spreadsheet',
       completedSteps: [],
