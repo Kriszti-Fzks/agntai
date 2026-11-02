@@ -4771,7 +4771,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             React.createElement('div',{className:'tc2-lbl'},t.label),
             React.createElement('div',{className:'tc2-act'},t.action),
             (t.textDeadlines||[]).map(dl=>React.createElement('div',{key:dl.id,style:{marginTop:5,fontSize:11,fontWeight:600,color:dl.diff<=3?'#dc2626':'#b45309'}},
-              (dl.isLease?'🔄 ':'⏰ ')+dl.text+' — '+dl.when+(dl.diff===0?' (today)':' ('+dl.diff+' day'+(dl.diff===1?'':'s')+')'))),
+              (dl.isLease?'🔄 ':'⏰ ')+dl.text+(String(dl.text).includes(dl.when)||String(dl.text).includes(dl.when.replace(/, \d{4}$/,''))?'':' — '+dl.when)+(dl.diff===0?' (today)':' ('+dl.diff+' day'+(dl.diff===1?'':'s')+')'))),
             t.isProtocol&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:5}},
               React.createElement('span',{style:{fontSize:10,background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:10,padding:'1px 7px',color:'#1a6b4a',fontWeight:600}},
                 (CHAN[t.protocolChannel]||'📋')+' '+t.protocolChannel.toUpperCase()+' · '+t.timingBadge
@@ -5428,8 +5428,31 @@ function autoMapHeaders(headers, rows){
   // This fixes a bug where "(unnamed)" was matching fullName via the substring "name".
   const isSyntheticHeader = h => !h || /^column\s*\d+$/i.test(h) || h === '(unnamed)';
 
+  // Pass 0: exact header matches for ALL single fields first, so e.g. "Last Contact"
+  // goes to Last Contact before Last Name's short alias "last" can grab it.
+  for(const f of IMPORT_FIELDS){
+    if(f.multi) continue;
+    for(const a of f.aliases){
+      const na = norm(a);
+      const i = normedHeaders.findIndex((h,j)=>!used.has(j) && !isSyntheticHeader(headers[j]) && h===na);
+      if(i>=0){ map[f.key] = headers[i]; used.add(i); break; }
+    }
+  }
+  // Pass 0b: "contains" matches for single fields, longest alias wins globally.
+  const _cands = [];
+  for(const f of IMPORT_FIELDS){
+    if(f.multi || map[f.key]) continue;
+    for(const a of f.aliases){
+      const na = norm(a);
+      normedHeaders.forEach((h,j)=>{ if(h && !used.has(j) && !isSyntheticHeader(headers[j]) && h.includes(na)) _cands.push({key:f.key, j, len:na.length}); });
+    }
+  }
+  _cands.sort((x,y)=>y.len-x.len);
+  for(const c of _cands){ if(map[c.key] || used.has(c.j)) continue; map[c.key]=headers[c.j]; used.add(c.j); }
+
   // Pass 1: header name matching (skip synthetic headers)
   for(const f of IMPORT_FIELDS){
+    if(!f.multi && map[f.key]) continue;
     if(f.multi){
       // Multi-mappable field: collect ALL columns whose header matches any alias.
       // E.g. for notes, grab both "Notes" and "Comments" if both exist.
@@ -5651,8 +5674,12 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       nextStep: 'Follow up — imported from spreadsheet',
       completedSteps: [],
       tags: allTags,
-      properties_shared:[], interested_properties:[], toured_properties:[],
-      appointments:[], documents:[],
+      // Same array defaults as dbLoadLeads (camelCase) so LeadDetail can open
+      // a freshly imported lead without a reload.
+      propertiesShared:[], interestedProperties:[], touredProperties:[],
+      appointments:[], documents:[], scheduledTasks:[], activityLog:[],
+      activeProtocolId:null, protocolStep:0, protocolStartedAt:null,
+      sphereCategory:null, isDemo:false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -7590,7 +7617,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
               },'Cancel')
             )
           ),
-          React.createElement('div',{style:{marginTop:10}},React.createElement(TagInput,{tags:lead.tags,onChange:t=>onUpd({...lead,tags:t})}))
+          React.createElement('div',{style:{marginTop:10}},React.createElement(TagInput,{tags:lead.tags||[],onChange:t=>onUpd({...lead,tags:t})}))
         )
       ),
       React.createElement('div',{className:'hr'},
@@ -7794,14 +7821,14 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
       }),
       React.createElement(Sec,{title:'Appointments',ic:'📅',ch:React.createElement(React.Fragment,null,
         React.createElement('div',{className:'il'},
-          !lead.appointments.length&&React.createElement('p',{className:'em2'},'No appointments yet'),
-          ...lead.appointments.map(a=>React.createElement('div',{key:a.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',{style:{flex:1}},React.createElement('div',{className:'lit'},React.createElement('span',null,a.type,' — ',React.createElement('span',{className:'lid'},fmt(a.date))),React.createElement('a',{className:'gb',href:gcal(a,lead.name),target:'_blank',rel:'noreferrer'},'📅 Add to Google Cal')),a.notes&&React.createElement('div',{className:'lin'},a.notes))))
+          !(lead.appointments||[]).length&&React.createElement('p',{className:'em2'},'No appointments yet'),
+          ...(lead.appointments||[]).map(a=>React.createElement('div',{key:a.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',{style:{flex:1}},React.createElement('div',{className:'lit'},React.createElement('span',null,a.type,' — ',React.createElement('span',{className:'lid'},fmt(a.date))),React.createElement('a',{className:'gb',href:gcal(a,lead.name),target:'_blank',rel:'noreferrer'},'📅 Add to Google Cal')),a.notes&&React.createElement('div',{className:'lin'},a.notes))))
         ),
         aA?React.createElement(AppointmentForm,{lead,onUpd,onClose:()=>setAA(false)})
         :React.createElement('button',{className:'ab',onClick:()=>setAA(true)},'+ Add Appointment')
       )}),
       React.createElement(Sec,{title:'Properties Shared',ic:'🏠',ch:React.createElement(React.Fragment,null,
-        React.createElement('div',{className:'il'},!lead.propertiesShared.length&&React.createElement('p',{className:'em2'},'No properties shared yet'),...lead.propertiesShared.map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.dateShared&&React.createElement('div',{className:'lid'},'Shared ',fmt(x.dateShared)),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
+        React.createElement('div',{className:'il'},!(lead.propertiesShared||[]).length&&React.createElement('p',{className:'em2'},'No properties shared yet'),...(lead.propertiesShared||[]).map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.dateShared&&React.createElement('div',{className:'lid'},'Shared ',fmt(x.dateShared)),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
         aP?React.createElement('div',{className:'af'},
           React.createElement('input',{className:'ai',placeholder:'Listing URL — Zillow, Redfin, MLS... (required)',value:pu,onChange:e=>setPu(e.target.value)}),
           React.createElement('input',{className:'ai',placeholder:'Quick note (optional) — e.g. too small, great yard',value:pn,onChange:e=>setPn(e.target.value)}),
@@ -7809,7 +7836,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
         :React.createElement('button',{className:'ab',onClick:()=>setAP(true)},'+ Add Property')
       )}),
       React.createElement(Sec,{title:'Interested Properties',ic:'❤️',ch:React.createElement(React.Fragment,null,
-        React.createElement('div',{className:'il'},!lead.interestedProperties.length&&React.createElement('p',{className:'em2'},'No interested properties yet'),...lead.interestedProperties.map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot r'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
+        React.createElement('div',{className:'il'},!(lead.interestedProperties||[]).length&&React.createElement('p',{className:'em2'},'No interested properties yet'),...(lead.interestedProperties||[]).map(x=>React.createElement('div',{key:x.id,className:'li'},React.createElement('div',{className:'dot r'}),React.createElement('div',null,React.createElement('div',{className:'lit'},React.createElement(PLink,{url:x.listingUrl,label:x.address||x.listingUrl}),!x.listingUrl&&React.createElement('span',null,x.address||'—')),x.notes&&React.createElement('div',{className:'lin'},x.notes))))),
         aI?React.createElement('div',{className:'af'},
           React.createElement('input',{className:'ai',placeholder:'Listing URL — Zillow, Redfin, MLS... (required)',value:iu,onChange:e=>setIu(e.target.value)}),
           React.createElement('input',{className:'ai',placeholder:'Quick note (optional) — e.g. loved the backyard',value:ino,onChange:e=>setIno(e.target.value)}),
@@ -11657,7 +11684,9 @@ function App(){
   const add=async l=>{
     // Default sphere contacts to category B when first added
     const withSphereDefault = (l.source==='SOI' && !l.sphereCategory) ? {...l, sphereCategory:'B'} : l;
+    const _arr=['tags','propertiesShared','interestedProperties','touredProperties','appointments','documents','scheduledTasks','completedSteps','activityLog'];
     const wl={...withSphereDefault,agent_id:user?.id};
+    _arr.forEach(k=>{ if(!Array.isArray(wl[k])) wl[k]=[]; });
     setLeads(prev=>[wl,...prev]);
     setSaving(true);
 
