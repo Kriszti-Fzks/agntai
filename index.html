@@ -2923,6 +2923,7 @@ function buildProtocolContext(lead, protocol, commHistory) {
   const draft = step.draftTemplate
     .replace(/\{firstName\}/g, firstName)
     .replace(/\{agentName\}/g, getAgentSignature().name)
+    .replace(/\{brokerageClause\}/g, getAgentSignature().brokerage ? ' with '+getAgentSignature().brokerage : '')
     .replace(/\{area\}/g, area)
     .replace(/\{showingDate\}/g, (lead.appointments||[]).slice(-1)[0]?.date ? new Date((lead.appointments||[]).slice(-1)[0].date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) : 'the showing date')
     .replace(/\{numHomes\}/g, String((lead.touredProperties||[]).length || 3))
@@ -3332,7 +3333,9 @@ Reply with ONLY the next step text, nothing else.`;
 function getAgentSignature() {
   const a = window._AGENT || {};
   const name = (a.profileName || '').trim() || '[Your Name]';
-  const brokerage = (a.brokerage || '').trim();
+  // AG-002: placeholder-ish values ("independent", "n/a", "[Brokerage]") count as no brokerage
+  let brokerage = (a.brokerage || '').trim();
+  if(/^(independent|indep\.?|none|n\/?a|-+|\[.*\])$/i.test(brokerage) || brokerage.includes('@')) brokerage = '';
   const sig = name + (a.phone ? ' | ' + a.phone : '') + (brokerage ? ' | ' + brokerage : '');
   const intro = brokerage ? name + ' with ' + brokerage : name;
   return { name, brokerage, sig, intro };
@@ -3342,7 +3345,8 @@ const AI_SIGNATURE_RULES = () => {
   return `SIGNATURE / SELF-INTRODUCTION RULES:
 - Introduce yourself as "${s.intro}" and sign as "${s.sig}".
 - NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
-- If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.`;
+- If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.
+- ${s.brokerage ? 'The brokerage is "'+s.brokerage+'".' : 'No brokerage is set: do NOT mention any brokerage and NEVER write a placeholder like "[Brokerage]".'} Never output any other bracketed placeholder such as [Brokerage], [Company] or [Phone].`;
 };
 // ── AG-054: grounding rules shared by every AI writer ───────────────────────
 const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than being vague):
@@ -4011,8 +4015,10 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             if(parsed && typeof parsed === 'object' && parsed.byLeadId) {
               // Validate timestamp is from today (not stale)
               if(parsed.timestamp) {
-                const cacheDate = new Date(parsed.timestamp).toDateString();
-                const todayDate = new Date().toDateString();
+                // AG-004: compare days in the agent's time zone, not the browser's
+                const _dayFmt = new Intl.DateTimeFormat('en-CA',{timeZone:getUserTimeZone()});
+                const cacheDate = _dayFmt.format(new Date(parsed.timestamp));
+                const todayDate = _dayFmt.format(new Date());
                 if(cacheDate === todayDate) {
                   setTriageMap(parsed.byLeadId);
                   setTriageTimestamp(parsed.timestamp);
@@ -5243,7 +5249,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
                   React.createElement('strong',null,'✨ AI set up your day.'),
                   ' ',Object.keys(triageMap).length+' leads reviewed.',
                   triageTimestamp && React.createElement('span',{style:{color:'#6b6760'}}, ' • Last refreshed: '+
-                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone()})
+                    new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone(),timeZoneName:'short'})
                   )
                 )
               : React.createElement('div',null,'Starting AI review…')
@@ -8325,11 +8331,14 @@ function AuthField({label,type,placeholder,value,onChange,onKeyDown}){
   );
 }
 
+// AG-006: remember ?mode= from the very first page load, before the app's URL
+// sync rewrites the address bar (that used to strip ?mode=signup).
+const INITIAL_AUTH_MODE = (()=>{ try { return new URLSearchParams(window.location.search).get('mode'); } catch(e){ return null; } })();
 function AuthPage({onAuth}){
   // mode: 'login' | 'signup' | 'forgot' | 'check-email' | 'reset-sent'
   const getModeFromUrl=()=>{
     const params=new URLSearchParams(window.location.search);
-    return params.get('mode')||'login';
+    return params.get('mode')||INITIAL_AUTH_MODE||'login';
   };
   const [mode,setMode]=React.useState(getModeFromUrl());
   // Watch URL changes and update mode
@@ -11523,6 +11532,27 @@ function IntegrationsView({user,db,handleExportData}){
   );
 }
 
+// AG-003: if a lead page crashes (e.g. right after an import), show a recover
+// screen instead of a blank white page, and re-fetch the lead from the DB.
+class LeadErrorBoundary extends React.Component{
+  constructor(p){super(p);this.state={err:null,tries:0};}
+  static getDerivedStateFromError(err){return {err};}
+  componentDidCatch(err){
+    console.error('LeadDetail crashed:',err);
+    if(this.state.tries<1){
+      this.setState({tries:1});
+      dbLoadLead(this.props.leadId).then(l=>{ if(l){ this.props.onReloaded&&this.props.onReloaded(l); this.setState({err:null}); } }).catch(()=>{});
+    }
+  }
+  render(){
+    if(!this.state.err) return this.props.children;
+    return React.createElement('div',{style:{padding:32,textAlign:'center',color:'#6b6760'}},
+      React.createElement('div',{style:{fontWeight:600,marginBottom:8}},'Loading this lead…'),
+      React.createElement('div',{style:{fontSize:13,marginBottom:16}},'If it does not open in a moment, go back and click it again.'),
+      React.createElement('button',{className:'btn',onClick:()=>this.props.onBack&&this.props.onBack()},'← Back to leads'));
+  }
+}
+
 function App(){
   const [user,setUser]=useState(null);
   const [authReady,setAuthReady]=useState(false);
@@ -11575,6 +11605,8 @@ function App(){
       isFromPopState.current = false;
       return; // Skip pushState, just update the displayed state
     }
+    // AG-006: while signed out, leave the URL alone so ?mode=signup survives
+    if (!user) return;
     const params = new URLSearchParams();
     if (view !== 'today') params.set('view', view);
     if (selId) params.set('lead', selId);
@@ -11807,6 +11839,10 @@ function App(){
     const withSphereDefault = (l.source==='SOI' && !l.sphereCategory) ? {...l, sphereCategory:'B'} : l;
     const _arr=['tags','propertiesShared','interestedProperties','touredProperties','appointments','documents','scheduledTasks','completedSteps','activityLog'];
     const wl={...withSphereDefault,agent_id:user?.id};
+    // AG-003: give imported/new leads the same defaults as leads loaded from the DB
+    ['name','phone','email','lastContact','notes','nextStep'].forEach(k=>{ if(wl[k]==null) wl[k]=''; else if(typeof wl[k]!=='string') wl[k]=String(wl[k]); });
+    if(!wl.source) wl.source='Other'; if(!wl.type) wl.type='Buyer'; if(!wl.stage) wl.stage='New';
+    if(wl.protocolStep==null) wl.protocolStep=0;
     _arr.forEach(k=>{ if(!Array.isArray(wl[k])) wl[k]=[]; });
     setLeads(prev=>[wl,...prev]);
     setSaving(true);
@@ -12037,7 +12073,7 @@ function App(){
         :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta:user?.user_metadata||{}})
         :view==='integrations'?React.createElement(IntegrationsView,{user,db,handleExportData})
         :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
-        :sel?React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
+        :sel?React.createElement(LeadErrorBoundary,{key:sel.id,leadId:sel.id,onBack:()=>setSelId(null),onReloaded:l=>setLeads(prev=>prev.map(x=>x.id===l.id?l:x))},React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}}))
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
       ),
       // Bottom tab bar — mobile only (hidden on desktop via CSS)
