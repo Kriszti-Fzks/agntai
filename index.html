@@ -1870,8 +1870,15 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
     ...deadlineLines,
   ].join('\n') : (tx ? `ACTIVE TX: side=${tx.side||'?'} status=${tx.status||'?'} (no near-term deadlines)` : '');
 
-  const lastContactStr = lead.lastContact
-    ? _triageFormatDate(lead.lastContact+'T00:00:00', today)
+  // Last contact = newest of the lead's lastContact field and any logged comm,
+  // so the AI can't say "no contact logged" when a date exists.
+  const _lcDates = [];
+  if(lead.lastContact) _lcDates.push(new Date(String(lead.lastContact).slice(0,10)+'T00:00:00'));
+  (comms||[]).forEach(x => { const d = new Date(x.createdAt || x.sentAt); if(!isNaN(d)) _lcDates.push(d); });
+  const _lcValid = _lcDates.filter(d => !isNaN(d));
+  const _lcLatest = _lcValid.length ? new Date(Math.max(..._lcValid.map(d=>d.getTime()))) : null;
+  const lastContactStr = _lcLatest
+    ? _triageFormatDate(_lcLatest.toISOString(), today) + ' (' + Math.max(0, Math.floor((today - _lcLatest)/86400000)) + ' days ago)'
     : 'never (just imported / no contact history)';
 
   const notes = (lead.notes||'').trim();
@@ -1900,6 +1907,8 @@ For each lead, you read their full picture (stage, notes, communication history,
   2. "skip"    — nothing needs to happen today. Tell the agent why (briefly).
   3. "confirm" — you need information the agent has but the system doesn't.
                  Ask one clear question and provide a follow-up draft for the "no" branch.
+
+LAST CONTACT RULE: Each lead card has a "Last contact:" line. If it shows a date, the lead HAS been contacted — never say "no contact is logged", "never contacted" or "no history", even if the Comms list is "(none)" (the date may come from an import). Only treat a lead as never contacted when it says "never". Be consistent: don't mention a date and then claim there's no contact.
 
 CRITICAL RULE: NEVER GUESS. If you don't know whether a lead replied, whether a meeting happened, whether something is resolved — return "confirm" and ask. Do not infer. Do not assume "probably they replied" or "probably it's fine". When in doubt, ask.
 
@@ -2173,13 +2182,17 @@ async function runMorningScan(leads, transactions, opts={}) {
                 : '[TASK]';
       const time = it.time ? ' '+it.time : '';
       const notes = it.notes ? ` — ${it.notes.slice(0,120)}` : '';
-      lines.push(`  ${tag}${time} ${it.label} · ${it.lead.name} (${it.lead.type}, stage: ${it.lead.stage})${notes}`);
+      const _lc = it.lead.lastContact ? String(it.lead.lastContact).slice(0,10) : null;
+      const lcStr = _lc ? `, last contact: ${_lc} (${Math.max(0, Math.floor((Date.now() - new Date(_lc+'T00:00:00'))/86400000))} days ago)` : ', last contact: none logged';
+      lines.push(`  ${tag}${time} ${it.label} · ${it.lead.name} (${it.lead.type}, stage: ${it.lead.stage}${lcStr})${notes}`);
     });
   });
 
   const prompt = `You are a real estate agent's morning briefing assistant. Below is everything scheduled today and in the next ${horizonDays} days for ${(window._AGENT?.name)||'the agent'}.
 
 For each TODAY item, write a one-line prep note: what to bring, who to call first, or what to double-check. For deadlines inside 72 hours, flag urgency. For pending AI tasks today, note that they still need confirmation.
+
+Each item shows the lead's last contact. If it has a date, the lead HAS been contacted — never say "no contact logged" or "never contacted" for that lead; only say that when it reads "none logged". Write dates like "Nov 29, 2026".
 
 Items:
 ${lines.join('\n')}
@@ -2903,7 +2916,7 @@ function buildProtocolContext(lead, protocol, commHistory) {
 
   // Fill draft template with what we know
   const agent = window._AGENT;
-  const firstName = lead.name.split(' ')[0];
+  const firstName = leadGreetingName(lead);
   // Extract area from notes — look for city names, or fall back to tags/notes snippet
   const areaMatch = (lead.notes||'').match(/\b(Irvine|Newport|Anaheim|Fullerton|Tustin|Lake Forest|Brea|Yorba Linda|Orange|Santa Ana|Laguna|Mission Viejo|Aliso Viejo|Dana Point|San Clemente|Huntington Beach|Long Beach|Cerritos|Torrance|Pasadena|Glendale|Burbank|Pomona|Ontario|Riverside|Corona|Temecula|Murrieta|Chino|Rancho|Fontana|Norwalk|Downey|Compton|Carson|Gardena|Hawthorne|Inglewood|El Monte|West Covina|Covina|Baldwin Park|Whittier|Pico Rivera|Montebello|Bell Gardens|Paramount|Lakewood|Bellflower|Artesia|Cerritos|Cypress|Los Alamitos|Seal Beach|Westminster|Garden Grove|Fountain Valley|Costa Mesa|Santa Ana|Tustin|Villa Park|Placentia|Buena Park|La Habra|La Mirada|Whittier|Hacienda Heights|Rowland Heights|Diamond Bar|Walnut|Chino Hills|San Dimas|Glendora|Azusa|Duarte|Monrovia|Arcadia|Temple City|Rosemead|San Gabriel|Alhambra|Monterey Park|Montebello|Commerce|Bell|Huntington Park|South Gate)\b/i);
   const area = areaMatch?.[0] || (lead.tags||[]).find(t=>t.length>3) || 'your area';
@@ -3107,6 +3120,37 @@ function getAutoProtocolAssignment(lead, commHistory, transactions) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Single source of truth passed into every AI call so all three features
 // see the same picture of the lead and their transaction.
+// ── Greeting name for a lead (Williamson fix) ───────────────────────────────
+// "The Williamson Estate" → "Williamson Estate" (not "The"); "Estate of John Doe"
+// → "Estate of John Doe"; "Acme Holdings LLC" → full name. People: first word.
+// A contactFirstName / contact_first_name field always wins if present.
+const _ENTITY_RE = /\b(estate|trust|llc|l\.l\.c\.|inc|inc\.|corp|corporation|company|co\.|ltd|lp|llp|partners|partnership|group|holdings|properties|realty|investments|ventures|foundation|church|association|hoa)\b/i;
+// Date label for AI context. Self-contained on purpose: AIAssistantView has a
+// LOCAL `fmt` (markdown renderer) that shadows the global date `fmt`, which made
+// the assistant crash (blank page) when this used `fmt`.
+// "Nov 4 ,2026" / "Nov 4,2026" / "Nov 29 2026" → "Nov 4, 2026" / "Nov 29, 2026"
+function normalizeDateText(t) {
+  return String(t)
+    .replace(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s*,\s*(\d{4})\b/g, '$1, $2')
+    .replace(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s+(\d{4})\b/g, '$1, $2');
+}
+function fmtLeadDate(d) {
+  if(!d) return '';
+  const str = String(d).slice(0,10); const [y,m,dy] = str.split('-');
+  const date = (y&&m&&dy) ? new Date(+y,+m-1,+dy) : new Date(d);
+  return isNaN(date) ? '' : date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+function leadGreetingName(leadOrName) {
+  const obj = (leadOrName && typeof leadOrName === 'object') ? leadOrName : null;
+  const contact = obj && (obj.contactFirstName || obj.contact_first_name);
+  if (contact && String(contact).trim()) return String(contact).trim();
+  let name = String(obj ? (obj.name || '') : (leadOrName || '')).replace(/\s*\((demo|test)\)\s*/ig, ' ').trim();
+  if (!name) return 'there';
+  if (_ENTITY_RE.test(name)) return name.replace(/^the\s+/i, '').trim() || name;
+  const words = name.replace(/^(the|mr\.?|mrs\.?|ms\.?|dr\.?)\s+/i, '').split(/\s+/).filter(Boolean);
+  return words[0] || name;
+}
+
 function buildLeadContext(lead, transaction, commHistory) {
   const ds = daysSince(lead.lastContact);
   const toured = (lead.touredProperties||[]).length;
@@ -3185,12 +3229,13 @@ function buildLeadContext(lead, transaction, commHistory) {
   return {
     // Core lead facts
     name: lead.name,
-    firstName: lead.name.split(' ')[0],
+    firstName: leadGreetingName(lead),
     type: lead.type,
     stage: lead.stage,
     ds,
     // Human-readable label for AI prompts — distinguishes "fresh import" from a real number.
-    dsLabel: ds === null ? 'never (just imported / no contact history yet)' : ds + ' days ago',
+    // Includes the actual date so the AI never claims "no prior contact" when one is recorded.
+    dsLabel: ds === null ? 'none recorded (no last-contact date and no logged communications)' : ds + ' days ago (' + (lead.lastContact ? fmtLeadDate(lead.lastContact) : 'from communication log') + ') — this counts as prior contact even if the communication log below is empty',
     notes: lead.notes,
     tags: (lead.tags||[]).join(', '),
     toured,
@@ -3304,6 +3349,8 @@ const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than bei
 - Use ONLY facts explicitly present in the data provided for THIS client. Do not invent or assume anything.
 - Never state that a step is done, passed, removed, signed, sent, approved or "behind us" unless the data explicitly says so. An upcoming deadline means the item is still OPEN.
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
+- If a "Last contact" date is given, the agent HAS been in contact with this client. Never say "no prior contact", "first contact" or "never contacted" in that case — say the details of that contact aren't logged instead.
+- Greet the client by the name given as the first name / greeting name. Never greet with an article like "The" — for an estate, trust or company use the full name given.
 - Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.`;
 const AI_PRIVACY_RULES = `PRIVACY RULES (critical):
 - This request is about ONE client only. Never mention, compare to, or reveal details about any other client, lead, transaction or file.`;
@@ -3479,7 +3526,7 @@ function genTasks(leads, transactions, noAnswerCounts){
   leads.forEach(lead=>{
     const ds=daysSince(lead.lastContact);
     const s=lead.stage;
-    const n=lead.name.split(' ')[0];
+    const n=leadGreetingName(lead);
     const toured=(lead.touredProperties||[]).length;
 
     // ── NEW ──────────────────────────────────────────────────────────────────
@@ -4121,7 +4168,10 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   }, []);
 
 
-  const runTriage = React.useCallback(async () => {
+  const runTriage = React.useCallback(async (opts) => {
+    // opts.fresh: ignore cached decisions so every task's wording is rebuilt
+    // (onClick passes an event object here, so check the flag explicitly).
+    const fresh = !!(opts && opts.fresh === true);
     if(!leads || !leads.length) return;
     if(!triageKeyRef.current) return; // wait for key to resolve
     setTriageRunning(true);
@@ -4143,9 +4193,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // both "Re-think today" within the same day (reuse today's decisions for
       // unchanged leads) and the daily auto-run (which seeded triageMap from
       // yesterday's cache via triagePreviousMap → here we promote it to baseline).
-      const baseline = (triageMap && Object.keys(triageMap).length)
+      const baseline = fresh ? {} : ((triageMap && Object.keys(triageMap).length)
         ? triageMap
-        : triagePreviousMap;
+        : triagePreviousMap);
       const result = await runDailyTriage(realLeads, transactions||[], {
         previousDecisions: baseline,
       });
@@ -4364,9 +4414,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       if(leaseEndDiff>30||leaseEndDiff<-30) return;
       const priority=leaseEndDiff<=0?'critical':leaseEndDiff<=14?'urgent':leaseEndDiff<=30?'today':'followup';
       const action=leaseEndDiff<0
-        ?`Lease expired ${Math.abs(leaseEndDiff)} days ago — find out if ${lead.name.split(' ')[0]} needs help finding a new place`
+        ?`Lease expired ${Math.abs(leaseEndDiff)} days ago — find out if ${leadGreetingName(lead)} needs help finding a new place`
         :leaseEndDiff===0
-        ?`Lease expires TODAY — call ${lead.name.split(' ')[0]} now to find out their plans`
+        ?`Lease expires TODAY — call ${leadGreetingName(lead)} now to find out their plans`
         :`Lease expires in ${leaseEndDiff} days — reach out now to find out if they're renewing or moving`;
       finalTasks.push({
         id:tx.id+'-lease-expiry',
@@ -4380,7 +4430,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         action,
         isProtocol:false,
         protocolChannel:'sms',
-        draftText:`Hey ${lead.name.split(' ')[0]}! Your lease is coming up on ${new Date(tx.close_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})} — are you thinking about renewing, or would you like help finding your next place? Happy to help either way! 😊`,
+        draftText:`Hey ${leadGreetingName(lead)}! Your lease is coming up on ${new Date(tx.close_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})} — are you thinking about renewing, or would you like help finding your next place? Happy to help either way! 😊`,
         timingBadge:leaseEndDiff<=0?'🔴 Overdue':leaseEndDiff<=14?'🔴 Urgent':'🟡 Due Soon',
       });
     });
@@ -4394,7 +4444,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       const diff = Math.round((new Date(it.date+'T12:00:00') - new Date(todayStr+'T12:00:00'))/(1000*60*60*24));
       const window_ = it.isLease ? 30 : 14;
       if(diff < 0 || diff > window_) return;
-      const first = lead.name.split(' ')[0];
+      const first = leadGreetingName(lead);
       const when = new Date(it.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
       const priority = diff===0 ? 'critical' : diff<=3 ? 'urgent' : 'today';
       const _order={critical:0,urgent:1,today:2,followup:3};
@@ -4415,9 +4465,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         priority, stage: lead.stage,
         icon: it.isLease ? '🔄' : '⏰',
         label: (it.isLease ? 'Lease Ends — ' : 'Deadline — ') + when,
-        action: diff===0
-          ? `Due TODAY: ${it.notes}`
-          : `${it.notes} — ${diff} day${diff===1?'':'s'} away (from ${first}'s ${it.fromText==='notes'?'notes':'next step'})`,
+        action: (it.isLease ? 'Lease ends' : it.notes)
+          + (String(it.notes).includes(when.replace(/, \d{4}$/,'')) && !it.isLease ? '' : ' — ' + when)
+          + (diff===0 ? ' (today)' : ' (' + diff + ' day' + (diff===1?'':'s') + ')'),
         isProtocol: false,
         protocolChannel: 'sms',
         draftText: it.isLease
@@ -4425,6 +4475,12 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
           : `Hi ${first}! Quick reminder — ${it.notes} (${when}). Let me know if you need anything from me before then!`,
         timingBadge: diff<=0 ? '🔴 Today' : diff<=3 ? '🔴 Urgent' : '🟡 Due Soon',
       });
+    });
+
+    // Normalize date punctuation in every task's visible text, including AI
+    // decisions cached before the formatter fix ("Nov 4 ,2026", "Nov 29 2026").
+    finalTasks.forEach(t => {
+      ['label','action','draftText','aiDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = normalizeDateText(t[k]); });
     });
 
     const order={critical:0,urgent:1,today:2,followup:3};
@@ -4736,7 +4792,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         // YES branch: textarea to type/paste the reply
         confirmAnswer === 'yes' && React.createElement('div',{style:{marginTop:12,padding:'12px 14px',background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:8}},
           React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#065f46',marginBottom:6}},
-            '✓ Great! What did '+t.leadName.split(' ')[0]+' say? (paste or type — we\'ll save it to the timeline)'
+            '✓ Great! What did '+leadGreetingName(leads.find(l=>l.id===t.leadId)||t.leadName)+' say? (paste or type — we\'ll save it to the timeline)'
           ),
           React.createElement('textarea',{
             value:confirmReply,
@@ -4764,7 +4820,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             'OK — here\'s a follow-up you can send:'
           ),
           React.createElement('div',{style:{padding:'10px 12px',background:'white',border:'1px solid #d4cfc4',borderRadius:6,fontSize:13,lineHeight:1.55,whiteSpace:'pre-wrap',marginBottom:8}},
-            t.followUpDraft || 'Hey '+t.leadName.split(' ')[0]+', just checking in — did you get a chance to read my last message? Curious what you think.'
+            t.followUpDraft || 'Hey '+leadGreetingName(leads.find(l=>l.id===t.leadId)||t.leadName)+', just checking in — did you get a chance to read my last message? Curious what you think.'
           ),
           React.createElement('div',{style:{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}},
             // SMS link (mobile) or copy (desktop)
@@ -4897,7 +4953,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       isGen&&React.createElement('div',{style:{margin:'10px 0 4px',padding:'12px 14px',background:'#f5f3ff',borderRadius:8,border:'1px solid #e9d5ff',fontSize:13,color:'#7c3aed',display:'flex',alignItems:'center',gap:8}},
         '✨ ',React.createElement('div',null,
           React.createElement('div',{style:{fontWeight:600}},'Writing personalized scripts...'),
-          React.createElement('div',{style:{fontSize:12,color:'#9333ea',marginTop:2}},'For '+(lead?.name?.split(' ')[0]||'this lead'))
+          React.createElement('div',{style:{fontSize:12,color:'#9333ea',marginTop:2}},'For '+((lead?leadGreetingName(lead):'')||'this lead'))
         )
       ),
 
@@ -5159,7 +5215,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       })(),
       React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:4}},
         !morningScanRunning && React.createElement('button',{
-          onClick:runMorningScanNow,
+          // Refresh rebuilds the schedule summary AND today's tasks (fresh AI
+          // decisions, new timestamp) so saved task wording is never stale.
+          onClick:()=>{ runMorningScanNow(); if(!triageRunning) runTriage({fresh:true}); },
           style:{fontSize:11,padding:'4px 10px',background:'white',color:'#1e3a8a',border:'1px solid #bfdbfe',borderRadius:5,cursor:'pointer',fontFamily:'inherit',fontWeight:500}
         },'🔄 Refresh scan')
       )
@@ -7556,9 +7614,9 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
             style:{marginTop:10,padding:'10px 12px',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:8,fontSize:12,color:'#78350f'}
           },
             React.createElement('div',{style:{fontWeight:600,marginBottom:6}},
-              pendingLog.channel==='call' ? '📞 Did you reach '+lead.name.split(' ')[0]+'?' :
-              pendingLog.channel==='sms'  ? '💬 Did you send the text to '+lead.name.split(' ')[0]+'?' :
-                                            '✉️ Did you send the email to '+lead.name.split(' ')[0]+'?'
+              pendingLog.channel==='call' ? '📞 Did you reach '+leadGreetingName(lead)+'?' :
+              pendingLog.channel==='sms'  ? '💬 Did you send the text to '+leadGreetingName(lead)+'?' :
+                                            '✉️ Did you send the email to '+leadGreetingName(lead)+'?'
             ),
             React.createElement('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
               React.createElement('button',{
@@ -7576,7 +7634,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
             style:{marginTop:10,padding:'12px 14px',background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8}
           },
             React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#1e3a8a',marginBottom:6}},
-              '💬 Text '+lead.name.split(' ')[0]+' at '+lead.phone
+              '💬 Text '+leadGreetingName(lead)+' at '+lead.phone
             ),
             React.createElement('textarea',{
               value:contactDraft,
@@ -7612,7 +7670,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
             style:{marginTop:10,padding:'12px 14px',background:'#faf5ff',border:'1px solid #e9d5ff',borderRadius:8}
           },
             React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#5b21b6',marginBottom:6}},
-              '✉️ Email '+lead.name.split(' ')[0]+' at '+lead.email
+              '✉️ Email '+leadGreetingName(lead)+' at '+lead.email
             ),
             React.createElement('input',{
               value:contactSubject,
@@ -7648,7 +7706,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
             style:{marginTop:10,padding:'12px 14px',background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:8}
           },
             React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'#065f46',marginBottom:8}},
-              '📞 Call '+lead.name.split(' ')[0]+' at '+lead.phone
+              '📞 Call '+leadGreetingName(lead)+' at '+lead.phone
             ),
             React.createElement('div',{style:{fontSize:12,color:'#065f46',marginBottom:8}},
               'When you tap Call, your phone will dial. After the call, come back and we\'ll ask how it went.'
@@ -8089,14 +8147,14 @@ function CalView({leads,transactions,onSel,onTaskAction}){
     let label = '';
     if(item.source === 'appointment') {
       cls += ' '+item.lead.type;
-      label = `${item.type} · ${item.lead.name.split(' ')[0]}`;
+      label = `${item.type} · ${leadGreetingName(item.lead)}`;
     } else if(item.source === 'task') {
       cls += ' task';
       if(item.status === 'pending') cls += ' pending';
-      label = `${item.label} · ${item.lead.name.split(' ')[0]}`;
+      label = `${item.label} · ${leadGreetingName(item.lead)}`;
     } else if(item.source === 'deadline') {
       cls += ' deadline';
-      label = `${item.label} · ${item.lead.name.split(' ')[0]}`;
+      label = `${item.label} · ${leadGreetingName(item.lead)}`;
     }
     const titleParts = [item.label, '— '+item.lead.name];
     if(item.source==='task' && item.status==='pending') titleParts.push('(AI suggested — pending confirmation)');
@@ -10063,7 +10121,7 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
         'Name: '+l.name+' [id:'+l.id+']',
         'Type: '+l.type+' | Stage: '+l.stage,
         commBlock,
-      'Last contact: '+(ds===null ? 'never (just imported / no contact history)' : ds+' days ago'),
+      'Last contact: '+(ds===null ? 'none recorded (no last-contact date and no logged communications)' : (lastContactDate ? fmtLeadDate(lastContactDate)+', ' : '')+ds+' days ago — counts as prior contact even if no communications are logged'),
         'Phone: '+l.phone+' | Email: '+l.email,
         'Notes: '+(l.notes||'none'),
         'Next step: '+(l.nextStep||'none'),
@@ -10376,7 +10434,7 @@ This format is required so the app can extract just the message for sending. If 
                 href: 'sms:'+(activeLead.phone||'').replace(/[^\d+]/g,'')+'?body='+encodeURIComponent(extractDraft(m.content).body),
                 onClick:()=>sendFromAssistant('sms', m.content, i),
                 style:{display:'inline-flex',alignItems:'center',gap:4,fontSize:12,padding:'6px 12px',background:'#2563eb',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600,textDecoration:'none'}
-              },'💬 Text to '+activeLead.name.split(' ')[0]),
+              },'💬 Text to '+leadGreetingName(activeLead)),
               activeLead.email && (() => {
                 const dr = extractDraft(m.content);
                 const url = buildEmailUrl(activeLead.email||'', dr.subject||'Following up', dr.body);
@@ -10386,7 +10444,7 @@ This format is required so the app can extract just the message for sending. If 
                   rel: 'noreferrer',
                   onClick:()=>onAssistantEmailClick(m.content, i),
                   style:{display:'inline-flex',alignItems:'center',gap:4,fontSize:12,padding:'6px 12px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600,textDecoration:'none'}
-                },'✉️ Email to '+activeLead.name.split(' ')[0]);
+                },'✉️ Email to '+leadGreetingName(activeLead));
               })(),
               React.createElement('button',{
                 onClick:()=>onAssistantCopyClick(m.content, i),
@@ -10956,7 +11014,7 @@ function DateConfirmStack() {
 
 function _buildTaskLabel(match, leadName) {
   const action = _actionToType(match.action);
-  const first = (leadName||'').split(' ')[0];
+  const first = leadGreetingName(leadName||'');
   if(first) return `${action} ${first}`;
   return action;
 }
