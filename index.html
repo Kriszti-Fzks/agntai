@@ -3879,7 +3879,7 @@ function AddModal({onClose,onAdd}){
   const sub=()=>{
     if(!f.name.trim())return;
     const id=Date.now().toString();
-    const newLead={id,...f,name:f.name.trim(),tags,lastContact:new Date().toISOString().slice(0,10),propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
+    const newLead={id,...f,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
     onAdd(newLead);
     // Scan notes + next-step for date references the agent may want on the calendar.
     const combined = [f.notes, f.nextStep].filter(Boolean).join(' \n ');
@@ -6438,7 +6438,7 @@ function SphereImportWizard({onClose, onAddContacts, onGoToToday, isOnboarding, 
       activeProtocolId: 'sphere_announcement',
       protocolStep: 0,
       protocolStartedAt: new Date().toISOString(),
-      lastContact: new Date().toISOString().slice(0,10),
+      lastContact: '', // AG-017: not contacted yet
       tags: ['Sphere'],
       nextStep: '',
       propertiesShared: [], interestedProperties: [], touredProperties: [],
@@ -6697,9 +6697,9 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
     React.createElement(PipeTracker,{leads,onFilter:setPf}),
     React.createElement('div',{className:'stats'},
       React.createElement('div',{className:'stat'},React.createElement('span',{className:'sn'},st.tot),React.createElement('span',{className:'sl'},'Total Leads')),
-      React.createElement('div',{className:'stat sh'},React.createElement('span',{className:'sn'},st.h),React.createElement('span',{className:'sl'},'Active')),
-      React.createElement('div',{className:'stat sm'},React.createElement('span',{className:'sn'},st.m),React.createElement('span',{className:'sl'},'In Progress')),
-      React.createElement('div',{className:'stat sw'},React.createElement('span',{className:'sn'},st.l),React.createElement('span',{className:'sl'},'Nurture / Closed'))
+      React.createElement('div',{className:'stat sh'},React.createElement('span',{className:'sn'},st.h),React.createElement('span',{className:'sl'},'Active Deals')),
+      React.createElement('div',{className:'stat sm'},React.createElement('span',{className:'sn'},st.m),React.createElement('span',{className:'sl'},'New & Working')),
+      React.createElement('div',{className:'stat sw'},React.createElement('span',{className:'sn'},st.l),React.createElement('span',{className:'sl'},'Nurture & Closed'))
     ),
     React.createElement('div',{className:'flt'},
       React.createElement('div',{className:'srch'},
@@ -7488,14 +7488,17 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
     React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:0}},
     React.createElement('button',{className:'bk',style:{marginBottom:0},onClick:onBack},'← Back to CRM'),
     React.createElement('button',{
-      style:{display:'flex',alignItems:'center',gap:5,background:'none',border:'1px solid #fca5a5',color:'#dc2626',borderRadius:6,padding:'5px 11px',fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit'},
+      // AG-024: low-key link style; still asks to confirm (type the word DELETE)
+      title:'Delete this lead',
+      style:{display:'flex',alignItems:'center',gap:4,background:'none',border:'none',color:'#a09d98',padding:'5px 4px',fontSize:11,fontWeight:400,cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'},
       onClick:()=>{
-        if(window.confirm('Delete '+lead.name+'? This cannot be undone.')){
+        const ans=window.prompt('Delete '+lead.name+'? This cannot be undone.\nType DELETE to confirm.');
+        if(ans&&ans.trim().toUpperCase()==='DELETE'){
           onDelete(lead.id);
           onBack();
         }
       }
-    },'🗑️ Delete Lead')
+    },'Delete lead')
   ),
     React.createElement('div',{className:'hero'},
       React.createElement('div',{className:'hl'},
