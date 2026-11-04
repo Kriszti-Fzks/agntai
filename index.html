@@ -10654,7 +10654,8 @@ This format is required so the app can extract just the message for sending. If 
 async function saveDemoTransaction(agentId){
   const addDays=(n)=>{const r=new Date();r.setDate(r.getDate()+n);return r.getFullYear() + '-' + String(r.getMonth() + 1).padStart(2, '0') + '-' + String(r.getDate()).padStart(2, '0');};
   const pfx=agentId.slice(0,8);
-  // Purchase transaction for Sarah & Mike Patel
+  // Purchase transaction for James & Patricia Lee (demo-4). AG-023/AG-058: kept
+  // consistent with the lead's notes (Mission Viejo, $825k, deposit in, inspection passed).
   await dbSaveTransaction({
     id:'demo-tx-'+pfx,
     lead_id:'demo-4-'+pfx,
@@ -10663,29 +10664,30 @@ async function saveDemoTransaction(agentId){
     status:'under_contract',
     property_type:'single_family',
     financing:'fha',
-    purchase_price:'1050000',
-    property_address:'22 Stonegate Dr, Irvine CA 92620',
+    purchase_price:'825000',
+    property_address:'Mission Viejo, CA (demo)',
     acceptance_date:addDays(-14),
     close_date:addDays(28),
-    deposit_due_date:addDays(-10),
-    inspection_removal_date:addDays(-5),
+    deposit_due_date:null,        // deposit already received
+    inspection_removal_date:null, // inspection already passed
     appraisal_removal_date:addDays(5),
     loan_removal_date:addDays(10),
     possession_date:addDays(29),
-    notes:'FHA loan — buyer putting 3.5% down. Inspection done, minor repairs agreed. Appraisal ordered. Lender says loan approval on track.',
+    notes:'FHA loan — buyer putting 3.5% down. Deposit received. Inspection passed, minor repairs agreed. Appraisal ordered. Lender says loan approval on track.',
     updated_at:new Date().toISOString(),
   });
-  // Lease transaction for Jessica Turner — ending in 28 days to trigger Today reminder
+  // Lease transaction for Marcus Johnson (demo-1, the tenant) — ending in 28 days.
+  // AG-020: was attached to the Williamson seller listing by mistake.
   await dbSaveTransaction({
     id:'demo-tx-lease-'+pfx,
-    lead_id:'demo-5-'+pfx,
+    lead_id:'demo-1-'+pfx,
     agent_id:agentId,
     side:'tenant',
     status:'active_lease',
     property_type:'condo',
     financing:'cash',
     purchase_price:'2800',
-    property_address:'3 Barranca Pkwy #210, Irvine CA 92618',
+    property_address:'Santa Ana, CA (demo)',
     acceptance_date:addDays(-337),
     close_date:addDays(28),
     possession_date:addDays(-337),
@@ -10693,7 +10695,7 @@ async function saveDemoTransaction(agentId){
     inspection_removal_date:null,
     appraisal_removal_date:null,
     loan_removal_date:null,
-    notes:'2BR near Spectrum. $2,800/mo. Lease ending in 28 days — needs to decide on renewal or new place.',
+    notes:'2BR apartment in Santa Ana. $2,800/mo. Lease ending in 28 days — needs to decide on renewal or new place.',
     updated_at:new Date().toISOString(),
   });
 }
@@ -10736,17 +10738,17 @@ function makeDemoLeads(agentId){
     {
       id:'demo-4-'+pfx,name:'James & Patricia Lee (Demo)',type:'Buyer',stage:'Under Contract',
       phone:'(555) 200-0004',email:'lee.demo@example.com',source:'Previous Client',
-      notes:'Under contract on 3br in Mission Viejo, $825k. Home inspection passed. Appraisal ordered. Final walkthrough scheduled for Friday. Loan underwriting in progress.',
+      notes:'Under contract on 3br in Mission Viejo, $825k. Home inspection passed. Appraisal ordered. Final walkthrough scheduled 2 days before closing. Loan underwriting in progress.',
       nextStep:'Confirm appraisal status and coordinate final walkthrough',lastContact:daysAgo(1),
       tags:['Under Contract','FHA Loan','Deadline'],activeProtocolId:'under_contract',protocolStep:1,
       protocolStartedAt:daysAgo(7),propertiesShared:[],interestedProperties:[],
-      touredProperties:[],appointments:[{id:'apt-uw',type:'Final Walkthrough',date:daysFrom(2),notes:'Before closing on Monday'}],documents:[],agent_id:agentId,isDemo:true,
+      touredProperties:[],appointments:[{id:'apt-uw',type:'Final Walkthrough',date:daysFrom(26),notes:'2 days before closing'}],documents:[],agent_id:agentId,isDemo:true,
       created_at:new Date().toISOString(),updated_at:new Date().toISOString()
     },
     {
       id:'demo-5-'+pfx,name:'The Williamson Estate (Demo)',type:'Seller',stage:'Listing Appointment',
       phone:'(555) 200-0005',email:'williamson.demo@example.com',source:'Sphere of Influence',
-      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA meeting scheduled for in 3 days at 2pm.',
+      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA / listing presentation at their home in 3 days at 2pm.',
       nextStep:'Complete CMA analysis and prepare compelling listing presentation',lastContact:daysAgo(1),
       tags:['Listing Appointment','High Value','Luxury','Motivated'],activeProtocolId:'listing_appointment',protocolStep:0,
       protocolStartedAt:daysAgo(2),propertiesShared:[],interestedProperties:[],
