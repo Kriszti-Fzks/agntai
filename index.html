@@ -2055,7 +2055,7 @@ async function _triageBatch(leads, commsByLead, transactions, today, agentName) 
 //
 // opts.previousDecisions: { [leadId]: {decision, _hash, _decidedAt, ...} }
 async function runDailyTriage(leads, transactions, opts={}) {
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 5; // AG-065: smaller batches run in parallel and finish sooner
   const today = new Date();
   const nowMs = today.getTime();
   const agentName = getAgentSignature().intro; // AG-055: profile name, never the email
@@ -2122,8 +2122,14 @@ async function runDailyTriage(leads, transactions, opts={}) {
   for(let i = 0; i < leadsToTriage.length; i += BATCH_SIZE) {
     batches.push(leadsToTriage.slice(i, i+BATCH_SIZE));
   }
+  let _done = 0;
+  try { opts.onProgress && opts.onProgress(0, leadsToTriage.length); } catch(e){}
   const batchResults = await Promise.all(
-    batches.map(batch => _triageBatch(batch, commsByLead, transactions, today, agentName))
+    batches.map(batch => _triageBatch(batch, commsByLead, transactions, today, agentName).then(res => {
+      // AG-065: report progress so the agent sees the scan moving
+      try { _done += batch.length; opts.onProgress && opts.onProgress(_done, leadsToTriage.length); } catch(e){}
+      return res;
+    }))
   );
 
   // Merge fresh AI decisions (stamped with their hash + timestamp) into the reused set.
@@ -3996,6 +4002,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   const [triageMap, setTriageMap] = useState({});
   const [triagePreviousMap, setTriagePreviousMap] = useState({});
   const [triageTimestamp, setTriageTimestamp] = useState(null);
+  const [triageProgress, setTriageProgress] = useState(null); // AG-065
   const [triageReady, setTriageReady] = useState(false);
   const [triageLoaded, setTriageLoaded] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
@@ -4227,7 +4234,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       const baseline = fresh ? {} : ((triageMap && Object.keys(triageMap).length)
         ? triageMap
         : triagePreviousMap);
+      setTriageProgress(null);
       const result = await runDailyTriage(realLeads, transactions||[], {
+        onProgress: (d,t) => setTriageProgress(t ? {done:d,total:t} : null),
         previousDecisions: baseline,
       });
       const envelope = { byLeadId: result.byLeadId, timestamp: now };
@@ -5284,7 +5293,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         triageRunning
           ? React.createElement('div',null,
               React.createElement('strong',null,'⏳ Just a moment — the AI is creating today\'s tasks.'),
-              ' Takes about 20-40 seconds.',
+              triageProgress && triageProgress.total ? ' Reviewed '+triageProgress.done+' of '+triageProgress.total+' leads…' : ' Takes about 20-40 seconds.',
               Object.keys(triagePreviousMap).length > 0 && React.createElement('div',{style:{fontSize:11,color:'#1e3a8a',marginTop:2}}, 'Showing yesterday\'s tasks faded while we refresh.')
             )
           : triageError
