@@ -8528,14 +8528,14 @@ function AuthPage({onAuth}){
         React.createElement('div',{style:{fontSize:22,fontWeight:700,marginBottom:6,letterSpacing:'-0.4px'}},'Create your account'),
         React.createElement('div',{style:{fontSize:13,color:'#a09d98',marginBottom:22,lineHeight:1.5}},'Join Agntai beta and start your first day with a plan. No credit card required.'),
 
-        React.createElement(AuthField,{label:'Full Name',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
-        React.createElement(AuthField,{label:'Email Address',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
-        React.createElement(AuthField,{label:'Password (min 8 chars)',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
-        React.createElement(AuthField,{label:'City',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
+        React.createElement(AuthField,{label:'Full Name *',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
+        React.createElement(AuthField,{label:'Email Address *',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
+        React.createElement(AuthField,{label:'Password (min 8 chars) *',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
+        React.createElement(AuthField,{label:'City *',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
 
         // Agent status
         React.createElement('div',{style:{marginBottom:14}},
-          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Licensed agent?'),
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Licensed agent? *'),
           React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},
             ...[
               {v:'licensed', l:'Yes — I\'m licensed'},
@@ -8550,9 +8550,10 @@ function AuthPage({onAuth}){
                   border:'1px solid '+(agentStatus===o.v?'#1a6b4a':'#e8e6e2'),
                   borderRadius:6,fontSize:13,fontFamily:'inherit',cursor:'pointer',
                   color:agentStatus===o.v?'#1a6b4a':'#3d3a35',
-                  fontWeight:agentStatus===o.v?500:400
-                }},
-                o.l
+                  fontWeight:agentStatus===o.v?600:400,
+                  boxShadow:agentStatus===o.v?'0 0 0 1px #1a6b4a':'none'
+                },'aria-pressed':agentStatus===o.v},
+                (agentStatus===o.v?'✓ ':'')+o.l
               )
             )
           )
@@ -8560,7 +8561,7 @@ function AuthPage({onAuth}){
 
         // Years in real estate
         React.createElement('div',{style:{marginBottom:14}},
-          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Years in real estate'),
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Years in real estate *'),
           React.createElement('select',{
             value:yearsInRealEstate,
             onChange:e=>setYearsInRealEstate(e.target.value),
@@ -8579,6 +8580,7 @@ function AuthPage({onAuth}){
           onClick:doFinishSignup,disabled:busy,
           onKeyDown:enter(doFinishSignup)
         },busy?'Creating account...':'Create Account →'),
+        React.createElement('div',{style:{marginTop:6,fontSize:11,color:'#a09d98',textAlign:'center'}},'* All fields are required'),
         err&&React.createElement('div',{style:{marginTop:12,padding:'10px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:13,color:'#dc2626'}},err),
         React.createElement('div',{style:{textAlign:'center',marginTop:16,fontSize:12,color:'#a09d98'}},
           'Already have an account? ',
