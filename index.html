@@ -11946,9 +11946,10 @@ function App(){
       let documents = [];
       if (leadIds.length > 0) {
         const {data:comms} = await db.from('communications').select('*').in('lead_id', leadIds);
-        const {data:docs} = await db.from('documents').select('*').in('lead_id', leadIds);
         communications = comms || [];
-        documents = docs || [];
+        // AG-040: there is no "documents" table — each lead keeps its document list
+        // in leads.documents (files live in the "documents" storage bucket).
+        documents = (leads||[]).flatMap(l => (Array.isArray(l.documents)?l.documents:[]).map(d => ({...d, lead_id: l.id, lead_name: l.name})));
       }
       const now = new Date();
       const localDate = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
