@@ -1804,6 +1804,23 @@ function _triageFormatDate(iso, today) {
 // ──────────────────────────────────────────────────────────────────────────────
 const TRIAGE_MAX_REUSE_AGE_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
+// AG-073 helpers: day key in the agent's time zone, and day-relative wording detection/shift
+function _userDayKey(d){ try { return new Intl.DateTimeFormat('en-CA',{timeZone:getUserTimeZone()}).format(d||new Date()); } catch(e){ return (d||new Date()).toDateString(); } }
+const _REL_DAY_RE = /\b(today|tomorrow|tonight|yesterday)\b/i;
+function _hasRelativeDayWords(dec){
+  if(!dec) return false;
+  return [dec.task,dec.reason,dec.why,dec.draftText,dec.subject,dec.confirmQuestion].some(t=>typeof t==='string'&&_REL_DAY_RE.test(t));
+}
+// Shift "tomorrow"→"today", "today"→"yesterday" for text written N days ago (display-only).
+function _shiftRelativeDays(text, days){
+  if(typeof text!=='string' || !days) return text;
+  if(days===1) return text.replace(/\b(today|tomorrow|tonight)\b/gi, (w)=>{
+    const lw=w.toLowerCase(); const out = lw==='tomorrow' ? 'today' : 'yesterday';
+    return w[0]===w[0].toUpperCase() ? out[0].toUpperCase()+out.slice(1) : out;
+  });
+  return text; // older than a day: leave as-is (decision is faded and re-run)
+}
+
 function _triageHash(lead, comms, transactions) {
   const tx = (transactions||[]).find(t => t.lead_id === lead.id);
   const c = (comms||[]);
@@ -2068,13 +2085,18 @@ async function runDailyTriage(leads, transactions, opts={}) {
     const prev = previousDecisions[lead.id];
     const prevAge = prev && prev._decidedAt ? (nowMs - new Date(prev._decidedAt).getTime()) : Infinity;
     const isFresh = prevAge < TRIAGE_MAX_REUSE_AGE_MS;
+    // AG-073: a decision written on an earlier day that uses day-relative words
+    // ("today", "tomorrow"…) must be re-evaluated, or it keeps "due tomorrow" on the day itself.
+    const prevDay = prev && prev._decidedAt ? _userDayKey(new Date(prev._decidedAt)) : null;
+    const relativeStale = prevDay && prevDay !== _userDayKey(new Date()) && _hasRelativeDayWords(prev);
     const canReuse = prev
       && prev._hash === currentHash
       && prev.decision
       && prev.decision !== 'confirm'
-      && isFresh;
+      && isFresh
+      && !relativeStale;
     if(canReuse) {
-      reusedDecisions[lead.id] = {...prev, _hash: currentHash};
+      reusedDecisions[lead.id] = {...prev, _hash: currentHash, _stage: lead.stage||''};
     } else {
       lead._triageHash = currentHash; // stash for post-AI stamp pass
       leadsToTriage.push(lead);
@@ -2111,7 +2133,7 @@ async function runDailyTriage(leads, transactions, opts={}) {
     if(!decision || !decision.leadId) return;
     const lead = leadsToTriage.find(l => l.id === decision.leadId);
     if(lead) {
-      byLeadId[decision.leadId] = {...decision, _hash: lead._triageHash, _decidedAt: decidedAt};
+      byLeadId[decision.leadId] = {...decision, _hash: lead._triageHash, _decidedAt: decidedAt, _stage: lead.stage||''};
     } else {
       byLeadId[decision.leadId] = {...decision, _decidedAt: decidedAt};
     }
@@ -4328,7 +4350,25 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // Real leads: honor triage decision if we have one
       const todayDecision = triageMap[lead.id];
       const yesterdayDecision = triagePreviousMap[lead.id];
-      const decision = todayDecision || yesterdayDecision;
+      let decision = todayDecision || yesterdayDecision;
+      // AG-016: lead's stage changed since the AI decided → show the rule-based task
+      // for the new stage instead of the stale AI card (until the next scan).
+      if(decision && decision._stage && lead.stage && decision._stage !== lead.stage) {
+        const t = protocolByLead[lead.id];
+        if(t) finalTasks.push(t);
+        handledLeadIds.add(lead.id);
+        return;
+      }
+      // AG-073: a decision written on an earlier day — shift "tomorrow"/"today" wording
+      if(decision && decision._decidedAt) {
+        const _d0 = new Date(_userDayKey(new Date(decision._decidedAt))+'T12:00:00');
+        const _d1 = new Date(_userDayKey(new Date())+'T12:00:00');
+        const _shift = Math.round((_d1-_d0)/86400000);
+        if(_shift===1) {
+          decision = {...decision};
+          ['task','reason','why','draftText','subject','confirmQuestion'].forEach(k=>{ decision[k]=_shiftRelativeDays(decision[k],1); });
+        }
+      }
       // If decision came from yesterday's cache (because today is still loading),
       // mark the resulting task as faded so the UI can dim it visually.
       const isFaded = !todayDecision && !!yesterdayDecision;
