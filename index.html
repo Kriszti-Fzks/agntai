@@ -567,6 +567,8 @@ select.fs{padding:7px 9px;border:1px solid #e8e6e2;border-radius:6px;background:
 .ms-row .ms-name{flex:1;color:#1a1916;}
 .ms-row .ms-lead{color:#6b6760;font-size:11px;}
 /* Date confirmation popup — stacks at bottom-right, slides in from below */
+/* AG-018: hide date-detected cards while any dialog is open */
+body:has(.mov) .dc-stack{display:none;}
 .dc-stack{position:fixed;bottom:78px;right:18px;display:flex;flex-direction:column;gap:10px;z-index:9000;max-width:380px;pointer-events:none;}
 @media (max-width: 760px){
   .dc-stack{bottom:130px;right:12px;left:12px;max-width:none;}
@@ -11392,6 +11394,8 @@ function LeadCaptureEmailView({user,db,meta}){
 }
 
 function IntegrationsView({user,db,handleExportData}){
+  // AG-046: the lead-capture address is stored as unique_email (older accounts: email_address)
+  const _leadEmailAddr=(user?.user_metadata?.unique_email||user?.user_metadata?.email_address||'');
   const [webhookUrl,setWebhookUrl]=useState(null);
   const [webhookLoading,setWebhookLoading]=useState(false);
   const [copied,setCopied]=useState(false);
@@ -11537,20 +11541,20 @@ function IntegrationsView({user,db,handleExportData}){
       React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
         React.createElement('div',{style:{flex:1}},
           React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'✉️ Email-to-Lead'),
-          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},user?.user_metadata?.email_address?'Share your unique email address. Anyone who emails it becomes a lead automatically.':'Get your own unique lead capture email. Share it anywhere — replies auto-create leads with no forms.')
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},_leadEmailAddr?'Share your unique email address. Anyone who emails it becomes a lead automatically.':'Get your own unique lead capture email. Share it anywhere — replies auto-create leads with no forms.')
         ),
-        React.createElement('span',{style:{background:user?.user_metadata?.email_address?'#d8e5df':'#fef3c7',color:user?.user_metadata?.email_address?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},user?.user_metadata?.email_address?'Active':'Setup Needed')
+        React.createElement('span',{style:{background:_leadEmailAddr?'#d8e5df':'#fef3c7',color:_leadEmailAddr?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},_leadEmailAddr?'Active':'Setup Needed')
       ),
 
-      user?.user_metadata?.email_address?
+      _leadEmailAddr?
         React.createElement('div',{style:{background:'#f9f9f9',padding:16,borderRadius:8,border:'1px dashed #d5d3cd'}},
           React.createElement('p',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Your Lead Email'),
-          React.createElement('div',{style:{fontSize:14,fontFamily:'monospace',color:'#1a1916',fontWeight:600,wordBreak:'break-all',marginBottom:8}},user.user_metadata.email_address),
+          React.createElement('div',{style:{fontSize:14,fontFamily:'monospace',color:'#1a1916',fontWeight:600,wordBreak:'break-all',marginBottom:8}},_leadEmailAddr),
           React.createElement('p',{style:{fontSize:12,color:'#6b6760',lineHeight:1.6}},'Share in: LinkedIn bio, email signature, website, social media. Replies auto-create leads.')
         )
       :
         React.createElement('div',{style:{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:8,padding:12}},
-          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Click "Edit profile" (bottom left) to generate your unique email.')
+          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Open "Your Lead Capture Email" in the sidebar to get your unique address.')
         )
     )
   );
@@ -11897,7 +11901,8 @@ function App(){
     const id='toast_'+Date.now();
     const el=document.createElement('div');
     el.id=id;
-    el.style.cssText=`position:fixed;top:20px;right:20px;background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;borderRadius:6px;fontSize:13px;fontWeight:500;zIndex:9999;maxWidth:300px;wordWrap:break-word;`;
+    // AG-041: valid CSS (was camelCase, so radius/z-index were ignored) and bottom-centre so it never covers page banners
+    el.style.cssText=`position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;border-radius:6px;font-size:13px;font-weight:500;z-index:10001;max-width:320px;word-wrap:break-word;box-shadow:0 4px 16px rgba(0,0,0,.15);`;
     el.textContent=msg;
     document.body.appendChild(el);
     setTimeout(()=>{el.remove();},3000);
