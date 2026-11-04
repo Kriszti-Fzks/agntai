@@ -930,7 +930,7 @@ async function dbLoadLeads() {
   if (error) { console.error('Load error:', error); return []; }
   return data.map(r => ({
     id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
-    source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
+    source: (r.source==='Lead Generation'?'Lead Gen':r.source)||'Other', type: r.type||'Buyer', stage: r.stage||'New',
     lastContact: r.last_contact||'', notes: r.notes||'', nextStep: r.next_step||'',
     tags: r.tags||[], propertiesShared: r.properties_shared||[],
     interestedProperties: r.interested_properties||[],
@@ -953,7 +953,7 @@ async function dbLoadLead(leadId) {
   const r = data;
   return {
     id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
-    source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
+    source: (r.source==='Lead Generation'?'Lead Gen':r.source)||'Other', type: r.type||'Buyer', stage: r.stage||'New',
     lastContact: r.last_contact||'', notes: r.notes||'', nextStep: r.next_step||'',
     tags: r.tags||[], propertiesShared: r.properties_shared||[],
     interestedProperties: r.interested_properties||[],
@@ -5151,12 +5151,14 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   // Personalized, time-aware greeting
   const _hour = getUserHour();
   const _greeting = _hour < 12 ? 'Good morning' : _hour < 17 ? 'Good afternoon' : 'Good evening';
-  const _firstName = (window._AGENT && window._AGENT.name) ? window._AGENT.name.split(' ')[0] : '';
+  // AG-071: only greet by the real profile name (never "Agent" or an email)
+  const _pn = (window._AGENT && (window._AGENT.profileName||'')).trim();
+  const _firstName = _pn && _pn.toLowerCase()!=='agent' && !_pn.includes('@') ? _pn.split(' ')[0] : '';
 
   return React.createElement('div',{className:'tv'},
     React.createElement('div',{className:'tv-hero tv-fade tv-fade-1'},
       React.createElement('h1',{className:'tv-greet'},
-        _greeting+', ',
+        _firstName ? _greeting+', ' : _greeting,
         _firstName ? React.createElement('em',null,_firstName) : null,
         ' ',
         React.createElement('span',{className:'wave'},'👋')
@@ -9781,7 +9783,7 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
 
 
 // ── AI ASSISTANT ──────────────────────────────────────────────────────────────
-function AIAssistantView({leads, transactions, communications, onGoToLead}) {
+function AIAssistantView({leads, transactions, communications, onGoToLead, dataReady}) {
   const {useState, useEffect, useRef, useMemo} = React;
   // AG-052: full book, used only for general (non-lead) conversations.
   const allLeads = leads || [];
@@ -10394,7 +10396,7 @@ This format is required so the app can extract just the message for sending. If 
           React.createElement('div',{style:{fontSize:12,color:'#a09d98'}},
             activeLead
               ? 'About: '+activeLead.name+' (tap "New chat" to switch context)'
-              : 'Knows your '+leads.length+' leads & '+transactions.length+' transactions'
+              : (dataReady===false ? 'Loading your leads…' : 'Knows your '+leads.length+' leads & '+transactions.length+' transactions')
           )
         ),
         // "New chat" button — only show when there are existing messages, so it doesn't
@@ -10708,7 +10710,7 @@ function makeDemoLeads(agentId){
     },
     {
       id:'demo-2-'+pfx,name:'Sophie Chen (Demo)',type:'Buyer',stage:'New',
-      phone:'(555) 200-0002',email:'sophie.demo@example.com',source:'Lead Generation',
+      phone:'(555) 200-0002',email:'sophie.demo@example.com',source:'Lead Gen',
       notes:'Downloaded buyer guide yesterday. First time buyer interested in Irvine area. Budget $450-550k. No pre-approval yet.',
       nextStep:'Intro call — understand timeline and get pre-approval started',lastContact:daysAgo(1),
       tags:['First Time Buyer','New Lead','Online'],activeProtocolId:'new_lead',protocolStep:0,
@@ -12091,7 +12093,7 @@ function App(){
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
         :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta:user?.user_metadata||{}})
         :view==='integrations'?React.createElement(IntegrationsView,{user,db,handleExportData})
-        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
+        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,dataReady:dbReady,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadErrorBoundary,{key:sel.id,leadId:sel.id,onBack:()=>setSelId(null),onReloaded:l=>setLeads(prev=>prev.map(x=>x.id===l.id?l:x))},React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}}))
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
       ),
