@@ -3374,7 +3374,8 @@ function getAgentSignature() {
 const AI_SIGNATURE_RULES = () => {
   const s = getAgentSignature();
   return `SIGNATURE / SELF-INTRODUCTION RULES:
-- Introduce yourself as "${s.intro}" and sign as "${s.sig}".
+- Introduce yourself as "${s.intro}". Sign EMAILS as "${s.sig}".
+- TEXT MESSAGES (SMS) get NO signature or sign-off block — a text may end with just the first name "${(s.name||'').split(' ')[0]}" only if it reads naturally (AG-019).
 - NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
 - If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.
 - ${s.brokerage ? 'The brokerage is "'+s.brokerage+'".' : 'No brokerage is set: do NOT mention any brokerage and NEVER write a placeholder like "[Brokerage]".'} Never output any other bracketed placeholder such as [Brokerage], [Company] or [Phone].`;
@@ -3386,7 +3387,9 @@ const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than bei
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
 - If a "Last contact" date is given, the agent HAS been in contact with this client. Never say "no prior contact", "first contact" or "never contacted" in that case — say the details of that contact aren't logged instead.
 - Greet the client by the name given as the first name / greeting name. Never greet with an article like "The" — for an estate, trust or company use the full name given.
-- Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.`;
+- Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.
+- NEVER leave a bracketed instruction or placeholder in the output (e.g. "[reflect back their criteria]", "[address]"). Fill it from the data (criteria, budget, area, homes toured/shared by address) or rewrite the sentence without it (AG-056).
+- Write plain, natural sentences. No redundant phrasing like "confirm your deposit is confirmed". If a deadline is overdue, say so clearly and ask for the specific thing needed (e.g. "Your deposit was due on <that date> — can you send the receipt today?", using the real date from the data) (AG-059).`;
 const AI_PRIVACY_RULES = `PRIVACY RULES (critical):
 - This request is about ONE client only. Never mention, compare to, or reveal details about any other client, lead, transaction or file.`;
 
