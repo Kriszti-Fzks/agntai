@@ -205,7 +205,7 @@ body{font-family:'DM Sans',sans-serif;background:#f8f7f5;color:#1a1916;font-size
 .spl.p-low{background:#f5f5f4;color:#78716c;}
 .task-stage{font-size:10px;padding:2px 7px;border-radius:20px;background:#f3f2f0;color:#6b6760;white-space:nowrap;}
 /* TODAY */
-.tv{padding:32px 28px 24px;max-width:960px;}
+.tv{padding:32px 28px 24px;max-width:1280px;width:100%;box-sizing:border-box;} /* AG-022: use the available width */
 
 /* Editorial greeting hero — feels like a magazine cover */
 .tv-hero{margin-bottom:32px;position:relative;}
@@ -302,7 +302,8 @@ body{font-family:'DM Sans',sans-serif;background:#f8f7f5;color:#1a1916;font-size
 .ps.ps-on .ps-arrow{filter:brightness(0.82);}
 .ps-arrow{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 6px 12px 20px;min-height:74px;position:relative;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,0 100%,16px 50%);transition:filter 0.15s;}
 .ps:first-child .ps-arrow{clip-path:polygon(0 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,0 100%);padding-left:14px;}
-.ps.ps-empty .ps-arrow{opacity:0.25;}
+.ps.ps-empty .ps-arrow{opacity:0.7;filter:saturate(0.3);} /* AG-021: readable zero-count stages */
+.pipe-track{border-radius:8px;overflow:hidden;}
 /* Last stage: flat right edge (finish line) with checkered flag feel */
 .ps:last-child .ps-arrow{clip-path:polygon(0 0,100% 0,100% 100%,0 100%,16px 50%);padding-left:22px;padding-right:10px;border-radius:0 8px 8px 0;}
 .ps-lbl{font-size:10px;font-weight:500;color:rgba(255,255,255,0.85);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px;}
@@ -5386,7 +5387,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       React.createElement('div',{className:'stk-dots'},...Array.from({length:Math.min(6,doneCount+visibleTasks.length)}).map((_,i)=>React.createElement('div',{key:i,className:`sdot ${i<doneCount?'done':'todo'}`},i<doneCount?'✓':i+1)))
     ),
     React.createElement('div',{className:'tsum tv-fade tv-fade-4'},
-      React.createElement('div',{className:'ts r'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='critical').length),React.createElement('span',{className:'ts-l'},'Critical')),
+      React.createElement('div',{className:'ts r'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='critical').length),React.createElement('span',{className:'ts-l',title:'Overdue or due today'},'Critical (overdue / today)')),
       React.createElement('div',{className:'ts o'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='urgent').length),React.createElement('span',{className:'ts-l'},'Urgent')),
       React.createElement('div',{className:'ts b'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='today').length),React.createElement('span',{className:'ts-l'},'Do Today')),
       React.createElement('div',{className:'ts'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='followup').length),React.createElement('span',{className:'ts-l'},'Follow Up'))
