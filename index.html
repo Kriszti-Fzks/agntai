@@ -12082,6 +12082,9 @@ function App(){
   const hasDemoLeads=leads.some(l=>l.isDemo);
   const hasRealLeads=leads.some(l=>!l.isDemo);
 
+  // AG-071: keep _AGENT in sync before paint so the sidebar never flashes "Agent"
+  if(user) window._AGENT=getAgent(user);
+
   return React.createElement(React.Fragment,null,
     saving&&React.createElement('div',{style:{position:'fixed',bottom:16,right:16,background:'#1a6b4a',color:'white',padding:'6px 12px',borderRadius:6,fontSize:12,zIndex:9999}},'💾 Saving...'),
     welcome&&React.createElement('div',{style:{position:'fixed',top:20,left:'50%',transform:'translateX(-50%)',background:'#1a6b4a',color:'white',padding:'12px 24px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:9999,boxShadow:'0 4px 20px rgba(0,0,0,0.18)',display:'flex',alignItems:'center',gap:10}},React.createElement('span',{style:{fontSize:20}},'🎉'),React.createElement('span',null,'Email confirmed! Welcome to Agntai!')),
@@ -12090,8 +12093,6 @@ function App(){
       React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'#1a1916'}},'Loading your leads...')
     ),
     React.createElement('div',{className:'shell'},
-      // AG-071: keep _AGENT in sync before paint so the sidebar never flashes "Agent"
-      if(user) window._AGENT=getAgent(user);
       React.createElement(Sidebar,{view,sv:v=>{
         setView(v); setSelId(null);
         // Note: clicking "AI Assistant" in the sidebar preserves the current
