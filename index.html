@@ -816,8 +816,11 @@ function CallBtn({phone,onCall,className,style,label}){
 // ── AGENT CONFIG — change these to your details ──────────────────────────────
 function getAgent(user){
   const meta=user?.user_metadata||{};
-  const name=meta.full_name||user?.email||'Agent';
-  const initials=name.split(' ').filter(Boolean).map(w=>w[0].toUpperCase()).slice(0,2).join('');
+  // AG-071: until we have a real profile name, leave name/initials empty so the UI
+  // can show a neutral skeleton instead of flashing "A / Agent".
+  const profileName=(meta.full_name||'').trim();
+  const name=profileName||(user?(user.email||''):'')||'';
+  const initials=profileName?profileName.split(' ').filter(Boolean).map(w=>w[0].toUpperCase()).slice(0,2).join(''):'';
   // Stash the meta globally so non-React helpers (like buildEmailUrl) can read preferences
   window._AGENT_META = meta;
   return{
@@ -827,10 +830,10 @@ function getAgent(user){
     brokerage:meta.brokerage||'',
     phone:meta.phone||'',
     // AG-055: real profile name only (never the account email) — used for signatures.
-    profileName:(meta.full_name||'').trim(),
+    profileName,
     license:meta.license_number||'',
     emailHandler:meta.email_handler||'gmail_web',
-    initials:initials||'RE',
+    initials:initials, // empty until a real profile name is known (AG-071)
   };
 }
 // Initialise with safe defaults — gets overwritten once user signs in
@@ -7548,7 +7551,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
       style:{display:'flex',alignItems:'center',gap:4,background:'none',border:'none',color:'#a09d98',padding:'5px 4px',fontSize:11,fontWeight:400,cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'},
       onClick:()=>{
         const ans=window.prompt('Delete '+lead.name+'? This cannot be undone.\nType DELETE to confirm.');
-        if(ans&&ans.trim().toUpperCase()==='DELETE'){
+        if(ans&&ans.trim()==='DELETE'){ // AG-024: exact case-sensitive DELETE
           onDelete(lead.id);
           onBack();
         }
@@ -8357,7 +8360,8 @@ async function resetPassword(email){
 
 // ── AUTH SCREEN ───────────────────────────────────────────────────────────────
 function AuthLogo(){
-  return React.createElement('div',{className:'alo'},
+  // AG-010: logo is a real link back to the welcome page
+  return React.createElement('a',{className:'alo',href:'/welcome.html',style:{textDecoration:'none',color:'inherit',display:'flex',alignItems:'center',gap:10}},
     React.createElement('div',{className:'amk'},'RE'),
     React.createElement('div',null,
       React.createElement('span',{className:'an'},'Agntai'),
@@ -9768,15 +9772,15 @@ function MobileHeader({onProfile, onSignOut}){
       ),
       React.createElement('button',{
         onClick:()=>setOpen(p=>!p),
-        style:{width:36,height:36,borderRadius:18,background:'#1a6b4a',border:'none',color:'white',fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}
-      }, agent.initials||'?')
+        style:{width:36,height:36,borderRadius:18,background:agent.profileName?'#1a6b4a':'#d4cfc4',border:'none',color:'white',fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}
+      }, agent.profileName?(agent.initials||''):'')
     ),
     open&&React.createElement('div',{
       style:{position:'fixed',top:52,right:12,background:'white',border:'1px solid #e8e6e2',borderRadius:10,padding:'8px',zIndex:300,boxShadow:'0 4px 20px rgba(0,0,0,0.12)',minWidth:180}
     },
       React.createElement('div',{style:{padding:'8px 10px',borderBottom:'1px solid #f0eeec',marginBottom:4}},
-        React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916'}}),agent.name||'Agent',
-        React.createElement('div',{style:{fontSize:11,color:'#a09d98'}}),agent.brokerage||''
+        React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916'}},agent.profileName||agent.name||''),
+        React.createElement('div',{style:{fontSize:11,color:'#a09d98'}},agent.brokerage||'')
       ),
       React.createElement('button',{
         onClick:()=>{setOpen(false);onProfile();},
@@ -9812,14 +9816,18 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
       React.createElement('div',{className:'sb-i'+(view==='integrations'?' on':''),onClick:()=>sv('integrations')},'🔗',React.createElement('span',{className:'sb-i-text'},' Integrations'))
     ),
     React.createElement('div',{className:'sb-ft'},
-      React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
-        React.createElement('div',{className:'sb-av'},window._AGENT.initials),
+      (()=>{
+        const _a=window._AGENT||{};
+        const _ready=!!(_a.profileName&&_a.profileName.trim());
+        return React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
+        React.createElement('div',{className:'sb-av',style:_ready?undefined:{background:'rgba(255,255,255,0.12)',color:'transparent'}},_ready?(_a.initials||''):''),
         React.createElement('div',{className:'sb-ft-text'},
-          React.createElement('span',{className:'sb-an'},window._AGENT.name),
-          React.createElement('span',{className:'sb-br'},window._AGENT.brokerage||agentEmail)
+          React.createElement('span',{className:'sb-an'},_ready?_a.name:''),
+          React.createElement('span',{className:'sb-br'},_ready?(_a.brokerage||agentEmail):'')
         ),
         !collapsed&&React.createElement('span',{style:{color:'rgba(255,255,255,0.3)',fontSize:13,marginLeft:4}},'⚙')
-      ),
+      );
+      })(),
       React.createElement('div',{className:'sb-ft-btns',style:{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}},
         React.createElement('button',{
           onClick:onProfile,
@@ -12082,6 +12090,8 @@ function App(){
       React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'#1a1916'}},'Loading your leads...')
     ),
     React.createElement('div',{className:'shell'},
+      // AG-071: keep _AGENT in sync before paint so the sidebar never flashes "Agent"
+      if(user) window._AGENT=getAgent(user);
       React.createElement(Sidebar,{view,sv:v=>{
         setView(v); setSelId(null);
         // Note: clicking "AI Assistant" in the sidebar preserves the current
