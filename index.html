@@ -205,7 +205,7 @@ body{font-family:'DM Sans',sans-serif;background:#f8f7f5;color:#1a1916;font-size
 .spl.p-low{background:#f5f5f4;color:#78716c;}
 .task-stage{font-size:10px;padding:2px 7px;border-radius:20px;background:#f3f2f0;color:#6b6760;white-space:nowrap;}
 /* TODAY */
-.tv{padding:32px 28px 24px;max-width:960px;}
+.tv{padding:32px 28px 24px;max-width:1280px;width:100%;box-sizing:border-box;} /* AG-022: use the available width */
 
 /* Editorial greeting hero — feels like a magazine cover */
 .tv-hero{margin-bottom:32px;position:relative;}
@@ -302,7 +302,8 @@ body{font-family:'DM Sans',sans-serif;background:#f8f7f5;color:#1a1916;font-size
 .ps.ps-on .ps-arrow{filter:brightness(0.82);}
 .ps-arrow{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px 6px 12px 20px;min-height:74px;position:relative;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,0 100%,16px 50%);transition:filter 0.15s;}
 .ps:first-child .ps-arrow{clip-path:polygon(0 0,calc(100% - 16px) 0,100% 50%,calc(100% - 16px) 100%,0 100%);padding-left:14px;}
-.ps.ps-empty .ps-arrow{opacity:0.25;}
+.ps.ps-empty .ps-arrow{opacity:0.7;filter:saturate(0.3);} /* AG-021: readable zero-count stages */
+.pipe-track{border-radius:8px;overflow:hidden;}
 /* Last stage: flat right edge (finish line) with checkered flag feel */
 .ps:last-child .ps-arrow{clip-path:polygon(0 0,100% 0,100% 100%,0 100%,16px 50%);padding-left:22px;padding-right:10px;border-radius:0 8px 8px 0;}
 .ps-lbl{font-size:10px;font-weight:500;color:rgba(255,255,255,0.85);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px;}
@@ -567,6 +568,8 @@ select.fs{padding:7px 9px;border:1px solid #e8e6e2;border-radius:6px;background:
 .ms-row .ms-name{flex:1;color:#1a1916;}
 .ms-row .ms-lead{color:#6b6760;font-size:11px;}
 /* Date confirmation popup — stacks at bottom-right, slides in from below */
+/* AG-018: hide date-detected cards while any dialog is open */
+body:has(.mov) .dc-stack{display:none;}
 .dc-stack{position:fixed;bottom:78px;right:18px;display:flex;flex-direction:column;gap:10px;z-index:9000;max-width:380px;pointer-events:none;}
 @media (max-width: 760px){
   .dc-stack{bottom:130px;right:12px;left:12px;max-width:none;}
@@ -813,8 +816,11 @@ function CallBtn({phone,onCall,className,style,label}){
 // ── AGENT CONFIG — change these to your details ──────────────────────────────
 function getAgent(user){
   const meta=user?.user_metadata||{};
-  const name=meta.full_name||user?.email||'Agent';
-  const initials=name.split(' ').filter(Boolean).map(w=>w[0].toUpperCase()).slice(0,2).join('');
+  // AG-071: until we have a real profile name, leave name/initials empty so the UI
+  // can show a neutral skeleton instead of flashing "A / Agent".
+  const profileName=(meta.full_name||'').trim();
+  const name=profileName||(user?(user.email||''):'')||'';
+  const initials=profileName?profileName.split(' ').filter(Boolean).map(w=>w[0].toUpperCase()).slice(0,2).join(''):'';
   // Stash the meta globally so non-React helpers (like buildEmailUrl) can read preferences
   window._AGENT_META = meta;
   return{
@@ -824,10 +830,10 @@ function getAgent(user){
     brokerage:meta.brokerage||'',
     phone:meta.phone||'',
     // AG-055: real profile name only (never the account email) — used for signatures.
-    profileName:(meta.full_name||'').trim(),
+    profileName,
     license:meta.license_number||'',
     emailHandler:meta.email_handler||'gmail_web',
-    initials:initials||'RE',
+    initials:initials, // empty until a real profile name is known (AG-071)
   };
 }
 // Initialise with safe defaults — gets overwritten once user signs in
@@ -930,7 +936,7 @@ async function dbLoadLeads() {
   if (error) { console.error('Load error:', error); return []; }
   return data.map(r => ({
     id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
-    source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
+    source: (r.source==='Lead Generation'?'Lead Gen':r.source)||'Other', type: r.type||'Buyer', stage: r.stage||'New',
     lastContact: r.last_contact||'', notes: r.notes||'', nextStep: r.next_step||'',
     tags: r.tags||[], propertiesShared: r.properties_shared||[],
     interestedProperties: r.interested_properties||[],
@@ -953,7 +959,7 @@ async function dbLoadLead(leadId) {
   const r = data;
   return {
     id: r.id, name: r.name, phone: r.phone||'', email: r.email||'',
-    source: r.source||'Other', type: r.type||'Buyer', stage: r.stage||'New',
+    source: (r.source==='Lead Generation'?'Lead Gen':r.source)||'Other', type: r.type||'Buyer', stage: r.stage||'New',
     lastContact: r.last_contact||'', notes: r.notes||'', nextStep: r.next_step||'',
     tags: r.tags||[], propertiesShared: r.properties_shared||[],
     interestedProperties: r.interested_properties||[],
@@ -1801,6 +1807,23 @@ function _triageFormatDate(iso, today) {
 // ──────────────────────────────────────────────────────────────────────────────
 const TRIAGE_MAX_REUSE_AGE_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
+// AG-073 helpers: day key in the agent's time zone, and day-relative wording detection/shift
+function _userDayKey(d){ try { return new Intl.DateTimeFormat('en-CA',{timeZone:getUserTimeZone()}).format(d||new Date()); } catch(e){ return (d||new Date()).toDateString(); } }
+const _REL_DAY_RE = /\b(today|tomorrow|tonight|yesterday)\b/i;
+function _hasRelativeDayWords(dec){
+  if(!dec) return false;
+  return [dec.task,dec.reason,dec.why,dec.draftText,dec.subject,dec.confirmQuestion].some(t=>typeof t==='string'&&_REL_DAY_RE.test(t));
+}
+// Shift "tomorrow"→"today", "today"→"yesterday" for text written N days ago (display-only).
+function _shiftRelativeDays(text, days){
+  if(typeof text!=='string' || !days) return text;
+  if(days===1) return text.replace(/\b(today|tomorrow|tonight)\b/gi, (w)=>{
+    const lw=w.toLowerCase(); const out = lw==='tomorrow' ? 'today' : 'yesterday';
+    return w[0]===w[0].toUpperCase() ? out[0].toUpperCase()+out.slice(1) : out;
+  });
+  return text; // older than a day: leave as-is (decision is faded and re-run)
+}
+
 function _triageHash(lead, comms, transactions) {
   const tx = (transactions||[]).find(t => t.lead_id === lead.id);
   const c = (comms||[]);
@@ -2035,7 +2058,7 @@ async function _triageBatch(leads, commsByLead, transactions, today, agentName) 
 //
 // opts.previousDecisions: { [leadId]: {decision, _hash, _decidedAt, ...} }
 async function runDailyTriage(leads, transactions, opts={}) {
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 5; // AG-065: smaller batches run in parallel and finish sooner
   const today = new Date();
   const nowMs = today.getTime();
   const agentName = getAgentSignature().intro; // AG-055: profile name, never the email
@@ -2065,13 +2088,18 @@ async function runDailyTriage(leads, transactions, opts={}) {
     const prev = previousDecisions[lead.id];
     const prevAge = prev && prev._decidedAt ? (nowMs - new Date(prev._decidedAt).getTime()) : Infinity;
     const isFresh = prevAge < TRIAGE_MAX_REUSE_AGE_MS;
+    // AG-073: a decision written on an earlier day that uses day-relative words
+    // ("today", "tomorrow"…) must be re-evaluated, or it keeps "due tomorrow" on the day itself.
+    const prevDay = prev && prev._decidedAt ? _userDayKey(new Date(prev._decidedAt)) : null;
+    const relativeStale = prevDay && prevDay !== _userDayKey(new Date()) && _hasRelativeDayWords(prev);
     const canReuse = prev
       && prev._hash === currentHash
       && prev.decision
       && prev.decision !== 'confirm'
-      && isFresh;
+      && isFresh
+      && !relativeStale;
     if(canReuse) {
-      reusedDecisions[lead.id] = {...prev, _hash: currentHash};
+      reusedDecisions[lead.id] = {...prev, _hash: currentHash, _stage: lead.stage||''};
     } else {
       lead._triageHash = currentHash; // stash for post-AI stamp pass
       leadsToTriage.push(lead);
@@ -2097,8 +2125,14 @@ async function runDailyTriage(leads, transactions, opts={}) {
   for(let i = 0; i < leadsToTriage.length; i += BATCH_SIZE) {
     batches.push(leadsToTriage.slice(i, i+BATCH_SIZE));
   }
+  let _done = 0;
+  try { opts.onProgress && opts.onProgress(0, leadsToTriage.length); } catch(e){}
   const batchResults = await Promise.all(
-    batches.map(batch => _triageBatch(batch, commsByLead, transactions, today, agentName))
+    batches.map(batch => _triageBatch(batch, commsByLead, transactions, today, agentName).then(res => {
+      // AG-065: report progress so the agent sees the scan moving
+      try { _done += batch.length; opts.onProgress && opts.onProgress(_done, leadsToTriage.length); } catch(e){}
+      return res;
+    }))
   );
 
   // Merge fresh AI decisions (stamped with their hash + timestamp) into the reused set.
@@ -2108,7 +2142,7 @@ async function runDailyTriage(leads, transactions, opts={}) {
     if(!decision || !decision.leadId) return;
     const lead = leadsToTriage.find(l => l.id === decision.leadId);
     if(lead) {
-      byLeadId[decision.leadId] = {...decision, _hash: lead._triageHash, _decidedAt: decidedAt};
+      byLeadId[decision.leadId] = {...decision, _hash: lead._triageHash, _decidedAt: decidedAt, _stage: lead.stage||''};
     } else {
       byLeadId[decision.leadId] = {...decision, _decidedAt: decidedAt};
     }
@@ -3343,7 +3377,8 @@ function getAgentSignature() {
 const AI_SIGNATURE_RULES = () => {
   const s = getAgentSignature();
   return `SIGNATURE / SELF-INTRODUCTION RULES:
-- Introduce yourself as "${s.intro}" and sign as "${s.sig}".
+- Introduce yourself as "${s.intro}". Sign EMAILS as "${s.sig}".
+- TEXT MESSAGES (SMS) get NO signature or sign-off block — a text may end with just the first name "${(s.name||'').split(' ')[0]}" only if it reads naturally (AG-019).
 - NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
 - If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.
 - ${s.brokerage ? 'The brokerage is "'+s.brokerage+'".' : 'No brokerage is set: do NOT mention any brokerage and NEVER write a placeholder like "[Brokerage]".'} Never output any other bracketed placeholder such as [Brokerage], [Company] or [Phone].`;
@@ -3355,7 +3390,9 @@ const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than bei
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
 - If a "Last contact" date is given, the agent HAS been in contact with this client. Never say "no prior contact", "first contact" or "never contacted" in that case — say the details of that contact aren't logged instead.
 - Greet the client by the name given as the first name / greeting name. Never greet with an article like "The" — for an estate, trust or company use the full name given.
-- Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.`;
+- Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.
+- NEVER leave a bracketed instruction or placeholder in the output (e.g. "[reflect back their criteria]", "[address]"). Fill it from the data (criteria, budget, area, homes toured/shared by address) or rewrite the sentence without it (AG-056).
+- Write plain, natural sentences. No redundant phrasing like "confirm your deposit is confirmed". If a deadline is overdue, say so clearly and ask for the specific thing needed (e.g. "Your deposit was due on <that date> — can you send the receipt today?", using the real date from the data) (AG-059).`;
 const AI_PRIVACY_RULES = `PRIVACY RULES (critical):
 - This request is about ONE client only. Never mention, compare to, or reveal details about any other client, lead, transaction or file.`;
 
@@ -3879,7 +3916,7 @@ function AddModal({onClose,onAdd}){
   const sub=()=>{
     if(!f.name.trim())return;
     const id=Date.now().toString();
-    const newLead={id,...f,name:f.name.trim(),tags,lastContact:new Date().toISOString().slice(0,10),propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
+    const newLead={id,...f,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
     onAdd(newLead);
     // Scan notes + next-step for date references the agent may want on the calendar.
     const combined = [f.notes, f.nextStep].filter(Boolean).join(' \n ');
@@ -3971,6 +4008,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   const [triageMap, setTriageMap] = useState({});
   const [triagePreviousMap, setTriagePreviousMap] = useState({});
   const [triageTimestamp, setTriageTimestamp] = useState(null);
+  const [triageProgress, setTriageProgress] = useState(null); // AG-065
   const [triageReady, setTriageReady] = useState(false);
   const [triageLoaded, setTriageLoaded] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
@@ -4202,7 +4240,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       const baseline = fresh ? {} : ((triageMap && Object.keys(triageMap).length)
         ? triageMap
         : triagePreviousMap);
+      setTriageProgress(null);
       const result = await runDailyTriage(realLeads, transactions||[], {
+        onProgress: (d,t) => setTriageProgress(t ? {done:d,total:t} : null),
         previousDecisions: baseline,
       });
       const envelope = { byLeadId: result.byLeadId, timestamp: now };
@@ -4325,7 +4365,25 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // Real leads: honor triage decision if we have one
       const todayDecision = triageMap[lead.id];
       const yesterdayDecision = triagePreviousMap[lead.id];
-      const decision = todayDecision || yesterdayDecision;
+      let decision = todayDecision || yesterdayDecision;
+      // AG-016: lead's stage changed since the AI decided → show the rule-based task
+      // for the new stage instead of the stale AI card (until the next scan).
+      if(decision && decision._stage && lead.stage && decision._stage !== lead.stage) {
+        const t = protocolByLead[lead.id];
+        if(t) finalTasks.push(t);
+        handledLeadIds.add(lead.id);
+        return;
+      }
+      // AG-073: a decision written on an earlier day — shift "tomorrow"/"today" wording
+      if(decision && decision._decidedAt) {
+        const _d0 = new Date(_userDayKey(new Date(decision._decidedAt))+'T12:00:00');
+        const _d1 = new Date(_userDayKey(new Date())+'T12:00:00');
+        const _shift = Math.round((_d1-_d0)/86400000);
+        if(_shift===1) {
+          decision = {...decision};
+          ['task','reason','why','draftText','subject','confirmQuestion'].forEach(k=>{ decision[k]=_shiftRelativeDays(decision[k],1); });
+        }
+      }
       // If decision came from yesterday's cache (because today is still loading),
       // mark the resulting task as faded so the UI can dim it visually.
       const isFaded = !todayDecision && !!yesterdayDecision;
@@ -5151,12 +5209,14 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   // Personalized, time-aware greeting
   const _hour = getUserHour();
   const _greeting = _hour < 12 ? 'Good morning' : _hour < 17 ? 'Good afternoon' : 'Good evening';
-  const _firstName = (window._AGENT && window._AGENT.name) ? window._AGENT.name.split(' ')[0] : '';
+  // AG-071: only greet by the real profile name (never "Agent" or an email)
+  const _pn = (window._AGENT && (window._AGENT.profileName||'')).trim();
+  const _firstName = _pn && _pn.toLowerCase()!=='agent' && !_pn.includes('@') ? _pn.split(' ')[0] : '';
 
   return React.createElement('div',{className:'tv'},
     React.createElement('div',{className:'tv-hero tv-fade tv-fade-1'},
       React.createElement('h1',{className:'tv-greet'},
-        _greeting+', ',
+        _firstName ? _greeting+', ' : _greeting,
         _firstName ? React.createElement('em',null,_firstName) : null,
         ' ',
         React.createElement('span',{className:'wave'},'👋')
@@ -5239,7 +5299,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         triageRunning
           ? React.createElement('div',null,
               React.createElement('strong',null,'⏳ Just a moment — the AI is creating today\'s tasks.'),
-              ' Takes about 20-40 seconds.',
+              triageProgress && triageProgress.total ? ' Reviewed '+triageProgress.done+' of '+triageProgress.total+' leads…' : ' Takes about 20-40 seconds.',
               Object.keys(triagePreviousMap).length > 0 && React.createElement('div',{style:{fontSize:11,color:'#1e3a8a',marginTop:2}}, 'Showing yesterday\'s tasks faded while we refresh.')
             )
           : triageError
@@ -5382,7 +5442,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       React.createElement('div',{className:'stk-dots'},...Array.from({length:Math.min(6,doneCount+visibleTasks.length)}).map((_,i)=>React.createElement('div',{key:i,className:`sdot ${i<doneCount?'done':'todo'}`},i<doneCount?'✓':i+1)))
     ),
     React.createElement('div',{className:'tsum tv-fade tv-fade-4'},
-      React.createElement('div',{className:'ts r'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='critical').length),React.createElement('span',{className:'ts-l'},'Critical')),
+      React.createElement('div',{className:'ts r'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='critical').length),React.createElement('span',{className:'ts-l',title:'Overdue or due today'},'Critical (overdue / today)')),
       React.createElement('div',{className:'ts o'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='urgent').length),React.createElement('span',{className:'ts-l'},'Urgent')),
       React.createElement('div',{className:'ts b'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='today').length),React.createElement('span',{className:'ts-l'},'Do Today')),
       React.createElement('div',{className:'ts'},React.createElement('span',{className:'ts-n'},allTasks.filter(t=>t.priority==='followup').length),React.createElement('span',{className:'ts-l'},'Follow Up'))
@@ -6436,7 +6496,7 @@ function SphereImportWizard({onClose, onAddContacts, onGoToToday, isOnboarding, 
       activeProtocolId: 'sphere_announcement',
       protocolStep: 0,
       protocolStartedAt: new Date().toISOString(),
-      lastContact: new Date().toISOString().slice(0,10),
+      lastContact: '', // AG-017: not contacted yet
       tags: ['Sphere'],
       nextStep: '',
       propertiesShared: [], interestedProperties: [], touredProperties: [],
@@ -6695,9 +6755,9 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
     React.createElement(PipeTracker,{leads,onFilter:setPf}),
     React.createElement('div',{className:'stats'},
       React.createElement('div',{className:'stat'},React.createElement('span',{className:'sn'},st.tot),React.createElement('span',{className:'sl'},'Total Leads')),
-      React.createElement('div',{className:'stat sh'},React.createElement('span',{className:'sn'},st.h),React.createElement('span',{className:'sl'},'Active')),
-      React.createElement('div',{className:'stat sm'},React.createElement('span',{className:'sn'},st.m),React.createElement('span',{className:'sl'},'In Progress')),
-      React.createElement('div',{className:'stat sw'},React.createElement('span',{className:'sn'},st.l),React.createElement('span',{className:'sl'},'Nurture / Closed'))
+      React.createElement('div',{className:'stat sh'},React.createElement('span',{className:'sn'},st.h),React.createElement('span',{className:'sl'},'Active Deals')),
+      React.createElement('div',{className:'stat sm'},React.createElement('span',{className:'sn'},st.m),React.createElement('span',{className:'sl'},'New & Working')),
+      React.createElement('div',{className:'stat sw'},React.createElement('span',{className:'sn'},st.l),React.createElement('span',{className:'sl'},'Nurture & Closed'))
     ),
     React.createElement('div',{className:'flt'},
       React.createElement('div',{className:'srch'},
@@ -7486,14 +7546,17 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
     React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:0}},
     React.createElement('button',{className:'bk',style:{marginBottom:0},onClick:onBack},'← Back to CRM'),
     React.createElement('button',{
-      style:{display:'flex',alignItems:'center',gap:5,background:'none',border:'1px solid #fca5a5',color:'#dc2626',borderRadius:6,padding:'5px 11px',fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit'},
+      // AG-024: low-key link style; still asks to confirm (type the word DELETE)
+      title:'Delete this lead',
+      style:{display:'flex',alignItems:'center',gap:4,background:'none',border:'none',color:'#a09d98',padding:'5px 4px',fontSize:11,fontWeight:400,cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'},
       onClick:()=>{
-        if(window.confirm('Delete '+lead.name+'? This cannot be undone.')){
+        const ans=window.prompt('Delete '+lead.name+'? This cannot be undone.\nType DELETE to confirm.');
+        if(ans&&ans.trim()==='DELETE'){ // AG-024: exact case-sensitive DELETE
           onDelete(lead.id);
           onBack();
         }
       }
-    },'🗑️ Delete Lead')
+    },'Delete lead')
   ),
     React.createElement('div',{className:'hero'},
       React.createElement('div',{className:'hl'},
@@ -8297,7 +8360,8 @@ async function resetPassword(email){
 
 // ── AUTH SCREEN ───────────────────────────────────────────────────────────────
 function AuthLogo(){
-  return React.createElement('div',{className:'alo'},
+  // AG-010: logo is a real link back to the welcome page
+  return React.createElement('a',{className:'alo',href:'/welcome.html',style:{textDecoration:'none',color:'inherit',display:'flex',alignItems:'center',gap:10}},
     React.createElement('div',{className:'amk'},'RE'),
     React.createElement('div',null,
       React.createElement('span',{className:'an'},'Agntai'),
@@ -8528,14 +8592,14 @@ function AuthPage({onAuth}){
         React.createElement('div',{style:{fontSize:22,fontWeight:700,marginBottom:6,letterSpacing:'-0.4px'}},'Create your account'),
         React.createElement('div',{style:{fontSize:13,color:'#a09d98',marginBottom:22,lineHeight:1.5}},'Join Agntai beta and start your first day with a plan. No credit card required.'),
 
-        React.createElement(AuthField,{label:'Full Name',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
-        React.createElement(AuthField,{label:'Email Address',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
-        React.createElement(AuthField,{label:'Password (min 8 chars)',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
-        React.createElement(AuthField,{label:'City',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
+        React.createElement(AuthField,{label:'Full Name *',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
+        React.createElement(AuthField,{label:'Email Address *',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
+        React.createElement(AuthField,{label:'Password (min 8 chars) *',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
+        React.createElement(AuthField,{label:'City *',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
 
         // Agent status
         React.createElement('div',{style:{marginBottom:14}},
-          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Licensed agent?'),
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Licensed agent? *'),
           React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},
             ...[
               {v:'licensed', l:'Yes — I\'m licensed'},
@@ -8550,9 +8614,10 @@ function AuthPage({onAuth}){
                   border:'1px solid '+(agentStatus===o.v?'#1a6b4a':'#e8e6e2'),
                   borderRadius:6,fontSize:13,fontFamily:'inherit',cursor:'pointer',
                   color:agentStatus===o.v?'#1a6b4a':'#3d3a35',
-                  fontWeight:agentStatus===o.v?500:400
-                }},
-                o.l
+                  fontWeight:agentStatus===o.v?600:400,
+                  boxShadow:agentStatus===o.v?'0 0 0 1px #1a6b4a':'none'
+                },'aria-pressed':agentStatus===o.v},
+                (agentStatus===o.v?'✓ ':'')+o.l
               )
             )
           )
@@ -8560,7 +8625,7 @@ function AuthPage({onAuth}){
 
         // Years in real estate
         React.createElement('div',{style:{marginBottom:14}},
-          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Years in real estate'),
+          React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',color:'#a09d98',marginBottom:8}},'Years in real estate *'),
           React.createElement('select',{
             value:yearsInRealEstate,
             onChange:e=>setYearsInRealEstate(e.target.value),
@@ -8579,6 +8644,7 @@ function AuthPage({onAuth}){
           onClick:doFinishSignup,disabled:busy,
           onKeyDown:enter(doFinishSignup)
         },busy?'Creating account...':'Create Account →'),
+        React.createElement('div',{style:{marginTop:6,fontSize:11,color:'#a09d98',textAlign:'center'}},'* All fields are required'),
         err&&React.createElement('div',{style:{marginTop:12,padding:'10px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:13,color:'#dc2626'}},err),
         React.createElement('div',{style:{textAlign:'center',marginTop:16,fontSize:12,color:'#a09d98'}},
           'Already have an account? ',
@@ -9706,15 +9772,15 @@ function MobileHeader({onProfile, onSignOut}){
       ),
       React.createElement('button',{
         onClick:()=>setOpen(p=>!p),
-        style:{width:36,height:36,borderRadius:18,background:'#1a6b4a',border:'none',color:'white',fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}
-      }, agent.initials||'?')
+        style:{width:36,height:36,borderRadius:18,background:agent.profileName?'#1a6b4a':'#d4cfc4',border:'none',color:'white',fontSize:13,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'inherit'}
+      }, agent.profileName?(agent.initials||''):'')
     ),
     open&&React.createElement('div',{
       style:{position:'fixed',top:52,right:12,background:'white',border:'1px solid #e8e6e2',borderRadius:10,padding:'8px',zIndex:300,boxShadow:'0 4px 20px rgba(0,0,0,0.12)',minWidth:180}
     },
       React.createElement('div',{style:{padding:'8px 10px',borderBottom:'1px solid #f0eeec',marginBottom:4}},
-        React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916'}}),agent.name||'Agent',
-        React.createElement('div',{style:{fontSize:11,color:'#a09d98'}}),agent.brokerage||''
+        React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#1a1916'}},agent.profileName||agent.name||''),
+        React.createElement('div',{style:{fontSize:11,color:'#a09d98'}},agent.brokerage||'')
       ),
       React.createElement('button',{
         onClick:()=>{setOpen(false);onProfile();},
@@ -9750,14 +9816,18 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
       React.createElement('div',{className:'sb-i'+(view==='integrations'?' on':''),onClick:()=>sv('integrations')},'🔗',React.createElement('span',{className:'sb-i-text'},' Integrations'))
     ),
     React.createElement('div',{className:'sb-ft'},
-      React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
-        React.createElement('div',{className:'sb-av'},window._AGENT.initials),
+      (()=>{
+        const _a=window._AGENT||{};
+        const _ready=!!(_a.profileName&&_a.profileName.trim());
+        return React.createElement('div',{className:'sb-ag',style:{cursor:'pointer'},onClick:onProfile,title:'Edit profile'},
+        React.createElement('div',{className:'sb-av',style:_ready?undefined:{background:'rgba(255,255,255,0.12)',color:'transparent'}},_ready?(_a.initials||''):''),
         React.createElement('div',{className:'sb-ft-text'},
-          React.createElement('span',{className:'sb-an'},window._AGENT.name),
-          React.createElement('span',{className:'sb-br'},window._AGENT.brokerage||agentEmail)
+          React.createElement('span',{className:'sb-an'},_ready?_a.name:''),
+          React.createElement('span',{className:'sb-br'},_ready?(_a.brokerage||agentEmail):'')
         ),
         !collapsed&&React.createElement('span',{style:{color:'rgba(255,255,255,0.3)',fontSize:13,marginLeft:4}},'⚙')
-      ),
+      );
+      })(),
       React.createElement('div',{className:'sb-ft-btns',style:{display:'flex',gap:8,marginTop:8,flexWrap:'wrap'}},
         React.createElement('button',{
           onClick:onProfile,
@@ -9779,7 +9849,7 @@ function Sidebar({view,sv,onSignOut,agentEmail,onProfile,collapsed,onExport}){
 
 
 // ── AI ASSISTANT ──────────────────────────────────────────────────────────────
-function AIAssistantView({leads, transactions, communications, onGoToLead}) {
+function AIAssistantView({leads, transactions, communications, onGoToLead, dataReady}) {
   const {useState, useEffect, useRef, useMemo} = React;
   // AG-052: full book, used only for general (non-lead) conversations.
   const allLeads = leads || [];
@@ -9901,6 +9971,7 @@ function AIAssistantView({leads, transactions, communications, onGoToLead}) {
   // Track when a log was successful, briefly, to show feedback in the helper panel
   const [helperLogged, setHelperLogged] = useState(false);
   // Copy feedback state for Copy buttons
+  const [emailMenuIdx, setEmailMenuIdx] = useState(null);
   const [copiedKey, setCopiedKey] = useState(null);
   const copyWithFeedback = (text, key) => {
     try { navigator.clipboard.writeText(text||''); } catch(e){}
@@ -10391,7 +10462,7 @@ This format is required so the app can extract just the message for sending. If 
           React.createElement('div',{style:{fontSize:12,color:'#a09d98'}},
             activeLead
               ? 'About: '+activeLead.name+' (tap "New chat" to switch context)'
-              : 'Knows your '+leads.length+' leads & '+transactions.length+' transactions'
+              : (dataReady===false ? 'Loading your leads…' : 'Knows your '+leads.length+' leads & '+transactions.length+' transactions')
           )
         ),
         // "New chat" button — only show when there are existing messages, so it doesn't
@@ -10444,16 +10515,32 @@ This format is required so the app can extract just the message for sending. If 
                 onClick:()=>sendFromAssistant('sms', m.content, i),
                 style:{display:'inline-flex',alignItems:'center',gap:4,fontSize:12,padding:'6px 12px',background:'#2563eb',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600,textDecoration:'none'}
               },'💬 Text to '+leadGreetingName(activeLead)),
+              // Email menu: Gmail / Outlook web compose, copy, or default mail app.
+              // Only opens a pre-filled draft — nothing is ever sent automatically.
               activeLead.email && (() => {
                 const dr = extractDraft(m.content);
-                const url = buildEmailUrl(activeLead.email||'', dr.subject||'Following up', dr.body);
-                return React.createElement('a',{
-                  href: url,
-                  target: '_blank',
-                  rel: 'noreferrer',
-                  onClick:()=>onAssistantEmailClick(m.content, i),
-                  style:{display:'inline-flex',alignItems:'center',gap:4,fontSize:12,padding:'6px 12px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600,textDecoration:'none'}
-                },'✉️ Email to '+leadGreetingName(activeLead));
+                const to = activeLead.email||'', su = dr.subject||'Following up', bd = dr.body||'';
+                const E = encodeURIComponent;
+                const gmail = 'https://mail.google.com/mail/?view=cm&fs=1&to='+E(to)+'&su='+E(su)+'&body='+E(bd);
+                const outlook = 'https://outlook.office.com/mail/deeplink/compose?to='+E(to)+'&subject='+E(su)+'&body='+E(bd);
+                const mailto = 'mailto:'+to+'?subject='+E(su)+'&body='+E(bd);
+                const open = emailMenuIdx===i;
+                const itemStyle = {display:'block',width:'100%',textAlign:'left',fontSize:12,padding:'8px 12px',background:'white',color:'#1a1916',border:'none',borderBottom:'1px solid #eee',cursor:'pointer',fontFamily:'inherit',textDecoration:'none',boxSizing:'border-box'};
+                const link = (href,label) => React.createElement('a',{href,target:'_blank',rel:'noreferrer',style:itemStyle,onClick:()=>{onAssistantEmailClick(m.content, i);setEmailMenuIdx(null);}},label);
+                return React.createElement('div',{style:{position:'relative',display:'inline-block'}},
+                  React.createElement('button',{
+                    type:'button',
+                    onClick:()=>setEmailMenuIdx(open?null:i),
+                    style:{display:'inline-flex',alignItems:'center',gap:4,fontSize:12,padding:'6px 12px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}
+                  },'✉️ Email to '+leadGreetingName(activeLead)+' ▾'),
+                  open && React.createElement('div',{style:{position:'absolute',top:'100%',left:0,marginTop:4,minWidth:220,background:'white',border:'1px solid #d4cfc4',borderRadius:8,boxShadow:'0 6px 20px rgba(0,0,0,.12)',zIndex:50,overflow:'hidden'}},
+                    link(gmail,'Open in Gmail'),
+                    link(outlook,'Open in Outlook'),
+                    React.createElement('button',{type:'button',style:itemStyle,onClick:()=>copyWithFeedback('To: '+to+'\nSubject: '+su+'\n\n'+bd,'em-'+i)},copiedKey==='em-'+i?'✓ Copied':'Copy email'),
+                    link(mailto,'Default mail app'),
+                    React.createElement('div',{style:{fontSize:11,color:'#a09d98',padding:'6px 12px'}},'Opens a draft only. Nothing is sent until you press Send.')
+                  )
+                );
               })(),
               React.createElement('button',{
                 onClick:()=>onAssistantCopyClick(m.content, i),
@@ -10628,7 +10715,8 @@ This format is required so the app can extract just the message for sending. If 
 async function saveDemoTransaction(agentId){
   const addDays=(n)=>{const r=new Date();r.setDate(r.getDate()+n);return r.getFullYear() + '-' + String(r.getMonth() + 1).padStart(2, '0') + '-' + String(r.getDate()).padStart(2, '0');};
   const pfx=agentId.slice(0,8);
-  // Purchase transaction for Sarah & Mike Patel
+  // Purchase transaction for James & Patricia Lee (demo-4). AG-023/AG-058: kept
+  // consistent with the lead's notes (Mission Viejo, $825k, deposit in, inspection passed).
   await dbSaveTransaction({
     id:'demo-tx-'+pfx,
     lead_id:'demo-4-'+pfx,
@@ -10637,29 +10725,30 @@ async function saveDemoTransaction(agentId){
     status:'under_contract',
     property_type:'single_family',
     financing:'fha',
-    purchase_price:'1050000',
-    property_address:'22 Stonegate Dr, Irvine CA 92620',
+    purchase_price:'825000',
+    property_address:'Mission Viejo, CA (demo)',
     acceptance_date:addDays(-14),
     close_date:addDays(28),
-    deposit_due_date:addDays(-10),
-    inspection_removal_date:addDays(-5),
+    deposit_due_date:null,        // deposit already received
+    inspection_removal_date:null, // inspection already passed
     appraisal_removal_date:addDays(5),
     loan_removal_date:addDays(10),
     possession_date:addDays(29),
-    notes:'FHA loan — buyer putting 3.5% down. Inspection done, minor repairs agreed. Appraisal ordered. Lender says loan approval on track.',
+    notes:'FHA loan — buyer putting 3.5% down. Deposit received. Inspection passed, minor repairs agreed. Appraisal ordered. Lender says loan approval on track.',
     updated_at:new Date().toISOString(),
   });
-  // Lease transaction for Jessica Turner — ending in 28 days to trigger Today reminder
+  // Lease transaction for Marcus Johnson (demo-1, the tenant) — ending in 28 days.
+  // AG-020: was attached to the Williamson seller listing by mistake.
   await dbSaveTransaction({
     id:'demo-tx-lease-'+pfx,
-    lead_id:'demo-5-'+pfx,
+    lead_id:'demo-1-'+pfx,
     agent_id:agentId,
     side:'tenant',
     status:'active_lease',
     property_type:'condo',
     financing:'cash',
     purchase_price:'2800',
-    property_address:'3 Barranca Pkwy #210, Irvine CA 92618',
+    property_address:'Santa Ana, CA (demo)',
     acceptance_date:addDays(-337),
     close_date:addDays(28),
     possession_date:addDays(-337),
@@ -10667,7 +10756,7 @@ async function saveDemoTransaction(agentId){
     inspection_removal_date:null,
     appraisal_removal_date:null,
     loan_removal_date:null,
-    notes:'2BR near Spectrum. $2,800/mo. Lease ending in 28 days — needs to decide on renewal or new place.',
+    notes:'2BR apartment in Santa Ana. $2,800/mo. Lease ending in 28 days — needs to decide on renewal or new place.',
     updated_at:new Date().toISOString(),
   });
 }
@@ -10689,7 +10778,7 @@ function makeDemoLeads(agentId){
     },
     {
       id:'demo-2-'+pfx,name:'Sophie Chen (Demo)',type:'Buyer',stage:'New',
-      phone:'(555) 200-0002',email:'sophie.demo@example.com',source:'Lead Generation',
+      phone:'(555) 200-0002',email:'sophie.demo@example.com',source:'Lead Gen',
       notes:'Downloaded buyer guide yesterday. First time buyer interested in Irvine area. Budget $450-550k. No pre-approval yet.',
       nextStep:'Intro call — understand timeline and get pre-approval started',lastContact:daysAgo(1),
       tags:['First Time Buyer','New Lead','Online'],activeProtocolId:'new_lead',protocolStep:0,
@@ -10710,17 +10799,17 @@ function makeDemoLeads(agentId){
     {
       id:'demo-4-'+pfx,name:'James & Patricia Lee (Demo)',type:'Buyer',stage:'Under Contract',
       phone:'(555) 200-0004',email:'lee.demo@example.com',source:'Previous Client',
-      notes:'Under contract on 3br in Mission Viejo, $825k. Home inspection passed. Appraisal ordered. Final walkthrough scheduled for Friday. Loan underwriting in progress.',
+      notes:'Under contract on 3br in Mission Viejo, $825k. Home inspection passed. Appraisal ordered. Final walkthrough scheduled 2 days before closing. Loan underwriting in progress.',
       nextStep:'Confirm appraisal status and coordinate final walkthrough',lastContact:daysAgo(1),
       tags:['Under Contract','FHA Loan','Deadline'],activeProtocolId:'under_contract',protocolStep:1,
       protocolStartedAt:daysAgo(7),propertiesShared:[],interestedProperties:[],
-      touredProperties:[],appointments:[{id:'apt-uw',type:'Final Walkthrough',date:daysFrom(2),notes:'Before closing on Monday'}],documents:[],agent_id:agentId,isDemo:true,
+      touredProperties:[],appointments:[{id:'apt-uw',type:'Final Walkthrough',date:daysFrom(26),notes:'2 days before closing'}],documents:[],agent_id:agentId,isDemo:true,
       created_at:new Date().toISOString(),updated_at:new Date().toISOString()
     },
     {
       id:'demo-5-'+pfx,name:'The Williamson Estate (Demo)',type:'Seller',stage:'Listing Appointment',
       phone:'(555) 200-0005',email:'williamson.demo@example.com',source:'Sphere of Influence',
-      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA meeting scheduled for in 3 days at 2pm.',
+      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA / listing presentation at their home in 3 days at 2pm.',
       nextStep:'Complete CMA analysis and prepare compelling listing presentation',lastContact:daysAgo(1),
       tags:['Listing Appointment','High Value','Luxury','Motivated'],activeProtocolId:'listing_appointment',protocolStep:0,
       protocolStartedAt:daysAgo(2),propertiesShared:[],interestedProperties:[],
@@ -11368,6 +11457,8 @@ function LeadCaptureEmailView({user,db,meta}){
 }
 
 function IntegrationsView({user,db,handleExportData}){
+  // AG-046: the lead-capture address is stored as unique_email (older accounts: email_address)
+  const _leadEmailAddr=(user?.user_metadata?.unique_email||user?.user_metadata?.email_address||'');
   const [webhookUrl,setWebhookUrl]=useState(null);
   const [webhookLoading,setWebhookLoading]=useState(false);
   const [copied,setCopied]=useState(false);
@@ -11513,20 +11604,20 @@ function IntegrationsView({user,db,handleExportData}){
       React.createElement('div',{style:{display:'flex',alignItems:'start',justifyContent:'space-between',marginBottom:16}},
         React.createElement('div',{style:{flex:1}},
           React.createElement('h2',{style:{fontSize:18,fontWeight:700,color:'#1a1916',marginBottom:4}},'✉️ Email-to-Lead'),
-          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},user?.user_metadata?.email_address?'Share your unique email address. Anyone who emails it becomes a lead automatically.':'Get your own unique lead capture email. Share it anywhere — replies auto-create leads with no forms.')
+          React.createElement('p',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},_leadEmailAddr?'Share your unique email address. Anyone who emails it becomes a lead automatically.':'Get your own unique lead capture email. Share it anywhere — replies auto-create leads with no forms.')
         ),
-        React.createElement('span',{style:{background:user?.user_metadata?.email_address?'#d8e5df':'#fef3c7',color:user?.user_metadata?.email_address?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},user?.user_metadata?.email_address?'Active':'Setup Needed')
+        React.createElement('span',{style:{background:_leadEmailAddr?'#d8e5df':'#fef3c7',color:_leadEmailAddr?'#1a6b4a':'#92400e',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap',marginLeft:16}},_leadEmailAddr?'Active':'Setup Needed')
       ),
 
-      user?.user_metadata?.email_address?
+      _leadEmailAddr?
         React.createElement('div',{style:{background:'#f9f9f9',padding:16,borderRadius:8,border:'1px dashed #d5d3cd'}},
           React.createElement('p',{style:{fontSize:11,fontWeight:600,color:'#a09d98',marginBottom:8,textTransform:'uppercase',letterSpacing:0.5}},'Your Lead Email'),
-          React.createElement('div',{style:{fontSize:14,fontFamily:'monospace',color:'#1a1916',fontWeight:600,wordBreak:'break-all',marginBottom:8}},user.user_metadata.email_address),
+          React.createElement('div',{style:{fontSize:14,fontFamily:'monospace',color:'#1a1916',fontWeight:600,wordBreak:'break-all',marginBottom:8}},_leadEmailAddr),
           React.createElement('p',{style:{fontSize:12,color:'#6b6760',lineHeight:1.6}},'Share in: LinkedIn bio, email signature, website, social media. Replies auto-create leads.')
         )
       :
         React.createElement('div',{style:{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:8,padding:12}},
-          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Click "Edit profile" (bottom left) to generate your unique email.')
+          React.createElement('p',{style:{fontSize:12,color:'#92400e',lineHeight:1.6}},'Email-to-Lead address not generated yet. Open "Your Lead Capture Email" in the sidebar to get your unique address.')
         )
     )
   );
@@ -11873,7 +11964,8 @@ function App(){
     const id='toast_'+Date.now();
     const el=document.createElement('div');
     el.id=id;
-    el.style.cssText=`position:fixed;top:20px;right:20px;background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;borderRadius:6px;fontSize:13px;fontWeight:500;zIndex:9999;maxWidth:300px;wordWrap:break-word;`;
+    // AG-041: valid CSS (was camelCase, so radius/z-index were ignored) and bottom-centre so it never covers page banners
+    el.style.cssText=`position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:${type==='success'?'#10b981':'#ef4444'};color:white;padding:12px 16px;border-radius:6px;font-size:13px;font-weight:500;z-index:10001;max-width:320px;word-wrap:break-word;box-shadow:0 4px 16px rgba(0,0,0,.15);`;
     el.textContent=msg;
     document.body.appendChild(el);
     setTimeout(()=>{el.remove();},3000);
@@ -11917,9 +12009,10 @@ function App(){
       let documents = [];
       if (leadIds.length > 0) {
         const {data:comms} = await db.from('communications').select('*').in('lead_id', leadIds);
-        const {data:docs} = await db.from('documents').select('*').in('lead_id', leadIds);
         communications = comms || [];
-        documents = docs || [];
+        // AG-040: there is no "documents" table — each lead keeps its document list
+        // in leads.documents (files live in the "documents" storage bucket).
+        documents = (leads||[]).flatMap(l => (Array.isArray(l.documents)?l.documents:[]).map(d => ({...d, lead_id: l.id, lead_name: l.name})));
       }
       const now = new Date();
       const localDate = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
@@ -11988,6 +12081,9 @@ function App(){
 
   const hasDemoLeads=leads.some(l=>l.isDemo);
   const hasRealLeads=leads.some(l=>!l.isDemo);
+
+  // AG-071: keep _AGENT in sync before paint so the sidebar never flashes "Agent"
+  if(user) window._AGENT=getAgent(user);
 
   return React.createElement(React.Fragment,null,
     saving&&React.createElement('div',{style:{position:'fixed',bottom:16,right:16,background:'#1a6b4a',color:'white',padding:'6px 12px',borderRadius:6,fontSize:12,zIndex:9999}},'💾 Saving...'),
@@ -12072,7 +12168,7 @@ function App(){
         :view==='open-houses'?React.createElement(OpenHouseView,{user,db,leads,onAddLead:add})
         :view==='lead-capture-email'?React.createElement(LeadCaptureEmailView,{user,db,meta:user?.user_metadata||{}})
         :view==='integrations'?React.createElement(IntegrationsView,{user,db,handleExportData})
-        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
+        :view==='assistant'?React.createElement(AIAssistantView,{leads,transactions,communications,dataReady:dbReady,onGoToLead:(leadId)=>{setSelId(leadId);setView('crm');}})
         :sel?React.createElement(LeadErrorBoundary,{key:sel.id,leadId:sel.id,onBack:()=>setSelId(null),onReloaded:l=>setLeads(prev=>prev.map(x=>x.id===l.id?l:x))},React.createElement(LeadDetail,{lead:sel,onBack:()=>setSelId(null),onUpd:upd,onDelete:del,transactions,onTx:()=>setView('transactions'),onStartTx:lead=>{setTxStartLead(lead);setView('transactions');},onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}}))
         :React.createElement(LeadList,{leads,transactions,onSel:setSelId,onUpd:upd,onAdd:()=>setShowAdd(true),onAddSphere:()=>{setWizardOnboarding(false);setShowSphereWizard(true);},onDelete:del,onImport:add})
       ),
