@@ -1115,10 +1115,7 @@ function _textDeadlinesForLead(lead) {
   const seen = new Set();
   const add = (m, sourceField) => {
     const isLease = _LEASE_RE.test(m.sentence||'');
-    // AG-047: a relative phrase ("tomorrow") next to an absolute date in the same
-    // Next Step must not become its own drifting deadline; only lease sentences
-    // may rely on the sentence-level date.
-    if(!_ABS_DATE_RE.test(m.phrase) && !(isLease && _ABS_DATE_RE.test(m.sentence||''))) return;
+    if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
     if(sourceField === 'notes' && !isLease) return; // notes: only lease ends
     const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
     if(seen.has(key)) return;
@@ -1209,7 +1206,9 @@ function buildCalendarItems(leads, transactions) {
   const txLeadIds = new Set((transactions||[]).map(tx => tx.lead_id).filter(Boolean));
   (leads||[]).forEach(lead => {
     if(lead.isDemo || txLeadIds.has(lead.id) || lead.stage === 'Closed') return;
-    _textDeadlinesForLead(lead).forEach(it => items.push(it));
+    // AG-047: don't double-list a Next Step date that already has a scheduled task.
+    const _taskDates = new Set((lead.scheduledTasks||[]).filter(t => t.status!=='dismissed' && t.status!=='done').map(t => t.dueDate));
+    _textDeadlinesForLead(lead).forEach(it => { if(!_taskDates.has(it.date)) items.push(it); });
   });
   (transactions||[]).forEach(tx => {
     const lead = (leads||[]).find(l => l.id === tx.lead_id);
@@ -1793,10 +1792,7 @@ function _triageFormatDate(iso, today) {
   const d = new Date(iso);
   if(isNaN(d.getTime())) return 'unknown date';
   const dayMs = 1000*60*60*24;
-  // AG-076: count calendar days (local midnight to local midnight). Math.floor on
-  // raw ms made future dates one day too far ("in 25 days" for a date 24 days out).
-  const _t = today instanceof Date ? today : new Date(today);
-  const days = Math.round((new Date(_t.getFullYear(),_t.getMonth(),_t.getDate()) - new Date(d.getFullYear(),d.getMonth(),d.getDate())) / dayMs);
+  const days = Math.floor((today - d) / dayMs);
   const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
   const dayStr = month + ' ' + d.getDate();
   if(days === 0) return dayStr + ' (today)';
@@ -1915,17 +1911,6 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
     `ACTIVE TX: side=${tx.side||'?'} status=${tx.status||'?'}`,
     ...deadlineLines,
   ].join('\n') : (tx ? `ACTIVE TX: side=${tx.side||'?'} status=${tx.status||'?'} (no near-term deadlines)` : '');
-  // AG-076: give the AI pre-counted days for dates written in notes / next step
-  // (e.g. "lease ends Nov 29") so its wording matches the task badge.
-  let textDlLine = '';
-  if(!tx) {
-    try {
-      const tl = _textDeadlinesForLead(lead).filter(it => isNear(it.date))
-        .map(it => `  ${it.isLease ? 'lease ends' : 'deadline'}: ${_triageFormatDate(it.date+'T00:00:00', today)} — use this exact day count`);
-      if(tl.length) textDlLine = ['DATES FROM NOTES/NEXT STEP:', ...tl].join('\n');
-    } catch(e) {}
-  }
-
   // Last contact = newest of the lead's lastContact field and any logged comm,
   // so the AI can't say "no contact logged" when a date exists.
   const _lcDates = [];
@@ -1946,7 +1931,6 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
     trimmedNotes ? `Notes: ${trimmedNotes}` : null,
     (lead.nextStep||'').trim() ? `Next step (agent set): ${lead.nextStep.trim()}` : null,
     txLine || null,
-    textDlLine || null,
     `Comms (most recent ${c.length}):`,
     commLines.length ? commLines.join('\n') : '  (none)',
   ].filter(Boolean).join('\n');
@@ -2211,7 +2195,8 @@ async function runDailyTriage(leads, transactions, opts={}) {
 // is roughly $0.001 per agent per day.
 // ──────────────────────────────────────────────────────────────────────────────
 function _scanSummaryJudgesDay(t) {
-  return /\b(light|quiet|slow|easy|busy|heavy|calm|full|packed|open)\s+(day|morning|afternoon|schedule)\b|\bnothing else\b|\bonly (one|1|a single)\b/i.test(String(t||''));
+  // Only whole-day workload verdicts; specific schedule facts ("only one showing at 2pm") stay.
+  return /^\s*(a\s+)?(light|quiet|slow|easy|busy|heavy|packed)\s+(day|morning|afternoon)\b/i.test(String(t||''));
 }
 async function runMorningScan(leads, transactions, opts={}) {
   const today = new Date();
@@ -3202,6 +3187,26 @@ const _ENTITY_RE = /\b(estate|trust|llc|l\.l\.c\.|inc|inc\.|corp|corporation|com
 // LOCAL `fmt` (markdown renderer) that shadows the global date `fmt`, which made
 // the assistant crash (blank page) when this used `fmt`.
 // "Nov 4 ,2026" / "Nov 4,2026" / "Nov 29 2026" → "Nov 4, 2026" / "Nov 29, 2026"
+// AG-078: if a sentence says "<date A> ... N days before/after ... <date B>" and the
+// direction contradicts the calendar, drop only the wrong relative phrase.
+const _MON = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,sept:8,oct:9,nov:10,dec:11};
+const _MD = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\\.?\\s+\\d{1,2}';
+const _REL_ORDER_RE = new RegExp('('+_MD+')([^.!?\\n]{0,80}?)\\b(?:\\d+|one|two|three|four|five|six|seven|a few|several)\\s+days?\\s+(before|after)\\s+([^.!?\\n]{0,40}?)('+_MD+')','gi');
+function _mdValue(md){
+  const m = String(md).match(/^([a-z]+)\.?\s+(\d{1,2})/i); if(!m) return null;
+  const mo = _MON[m[1].slice(0,4).toLowerCase()] ?? _MON[m[1].slice(0,3).toLowerCase()];
+  return mo==null ? null : mo*100 + (+m[2]);
+}
+function fixRelativeDateOrder(t) {
+  return String(t).replace(_REL_ORDER_RE, (all, a, mid, dir, mid2, b) => {
+    const va = _mdValue(a), vb = _mdValue(b);
+    if(va==null || vb==null || va===vb) return all;
+    if(Math.abs(Math.floor(va/100)-Math.floor(vb/100)) > 6) return all; // year boundary: don't guess
+    const actual = va < vb ? 'before' : 'after';
+    if(actual === dir.toLowerCase()) return all;
+    return a + mid.replace(/[\s,;—–-]+$/,'') + ' (' + mid2.trim().replace(/\s*on$/i,'') + (mid2.trim() ? ': ' : '') + b + ')';
+  });
+}
 function normalizeDateText(t) {
   return String(t)
     .replace(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s*,\s*(\d{4})\b/g, '$1, $2')
@@ -3946,6 +3951,18 @@ function PipeTracker({leads,onFilter}){
   );
 }
 
+// AG-047 helper (pure): Add Lead form → lead fields + follow-up scheduled task.
+function _addLeadFollowUp(f){
+  const {followUpDate, ...fields} = f;
+  const scheduledTasks = [];
+  if(followUpDate && /^\d{4}-\d{2}-\d{2}$/.test(followUpDate)){
+    const when = new Date(followUpDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    scheduledTasks.push({id:_newTaskId(), dueDate:followUpDate, dueTime:null, type:'Follow-up', label:'Follow up',
+      draftText:'', channel:null, status:'confirmed', source:'manual', sourceRef:'add-lead', createdAt:new Date().toISOString()});
+    if(!(fields.nextStep||'').trim()) fields.nextStep = 'Follow up ' + when;
+  }
+  return {fields, scheduledTasks};
+}
 function AddModal({onClose,onAdd}){
   const [f,setF]=useState({name:'',phone:'',email:'',source:'Referral',type:'Buyer',stage:'New',notes:'',nextStep:'',followUpDate:''});
   const [tags,setTags]=useState([]);
@@ -3953,19 +3970,16 @@ function AddModal({onClose,onAdd}){
   const sub=()=>{
     if(!f.name.trim())return;
     const id=Date.now().toString();
-    // AG-047: a follow-up date is stored in Next Step ("Call tomorrow. Follow up Nov 10, 2026")
-    // so Today/Calendar pick it up through the existing Next Step date scan.
-    const {followUpDate, ...fields} = f;
-    let nextStep = (fields.nextStep||'').trim();
-    if(followUpDate){
-      const when = new Date(followUpDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-      nextStep = (nextStep ? nextStep.replace(/[.;\s]+$/,'') + '. ' : '') + 'Follow up ' + when;
-    }
-    fields.nextStep = nextStep;
-    const newLead={id,...fields,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
+    // AG-047: the follow-up date becomes a confirmed scheduled task (existing
+    // scheduled_tasks column, no schema change). The agent's Next Step text is never
+    // rewritten; only an EMPTY Next Step gets a default "Follow up <date>".
+    const {fields, scheduledTasks} = _addLeadFollowUp(f);
+    const newLead={id,...fields,scheduledTasks,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
     onAdd(newLead);
     // Scan notes + next-step for date references the agent may want on the calendar.
-    const combined = [f.notes, nextStep].filter(Boolean).join(' \n ');
+    // Scan only what the agent typed (not the auto-filled default) so the follow-up
+    // isn't offered again as a second calendar task.
+    const combined = [f.notes, f.nextStep].filter(Boolean).join(' \n ');
     if(combined) detectAndNotify(id, newLead.name, combined, 'new lead');
     onClose();
   };
@@ -4591,7 +4605,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     // Normalize date punctuation in every task's visible text, including AI
     // decisions cached before the formatter fix ("Nov 4 ,2026", "Nov 29 2026").
     finalTasks.forEach(t => {
-      ['label','action','draftText','aiDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = normalizeDateText(t[k]); });
+      ['label','action','draftText','aiDraft','confirmQuestion','followUpDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = fixRelativeDateOrder(normalizeDateText(t[k])); });
     });
 
     // AG-025: fold Closest Deals into Your Tasks (one list, no duplicate panel).
@@ -5852,23 +5866,7 @@ function _importDate(raw){
   const d=new Date(t); if(isNaN(d)) return '';
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
-// AG-027: map spreadsheet source text onto the app's Source choices.
-const LEAD_SOURCES = ['Lead Magnet','Social','Lead Gen','Open House','SOI','Referral','Website','Other'];
-function normalizeSource(raw, fallback){
-  const fb = LEAD_SOURCES.includes(fallback) ? fallback : 'Other';
-  const s = String(raw||'').toLowerCase().trim();
-  if(!s) return fb;
-  for(const v of LEAD_SOURCES){ if(s===v.toLowerCase()) return v; }
-  if(/open ?house/.test(s)) return 'Open House';
-  if(/referr|referal/.test(s)) return 'Referral';
-  if(/\bsoi\b|sphere|past client|friend|family|neighbo/.test(s)) return 'SOI';
-  if(/facebook|instagram|\bfb\b|\big\b|tiktok|linkedin|social|youtube/.test(s)) return 'Social';
-  if(/website|web site|\bweb\b|landing|google|\bseo\b/.test(s)) return 'Website';
-  if(/zillow|realtor\.com|redfin|trulia|homes\.com|opcity|lead ?gen|ppc|\bads?\b/.test(s)) return 'Lead Gen';
-  if(/magnet|ebook|guide|download|webinar|checklist/.test(s)) return 'Lead Magnet';
-  return 'Other';
-}
-function buildLeadsFromRows({headers, rows, mapping, existingLeads, defaultSource}){
+function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
   // Build idx[key] = index OR idx[key] = [index, index, ...] for multi-mapped fields.
   const idx = {};
   for(const k of Object.keys(mapping||{})){
@@ -5961,7 +5959,7 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads, defaultSourc
       phone: normalizePhone(phoneRaw),
       type: normalizeType(get(row,'type')),
       stage: get(row,'stage') || 'New',
-      source: normalizeSource(get(row,'source'), defaultSource),
+      source: get(row,'source') || 'Other',
       // Only set when the spreadsheet provides it (mapped 'lastContact' column).
       lastContact: _importDate(get(row,'lastContact')),
       notes: finalNotes,
@@ -5982,8 +5980,6 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads, defaultSourc
 }
 
 function ImportModal({onClose, onImport, existingLeads}){
-  // AG-027: Source used for rows whose spreadsheet has no / blank Source.
-  const [importDefaultSource, setImportDefaultSource] = useState('Other');
   // Persistence key — survives modal close, page reload, even logout-relogin within session.
   // Stores: text, fileName, rawData (the unsplit headers+rows), hasHeaderRow toggle, mapping, step.
   const PERSIST_KEY = 'agntai_import_v1';
@@ -6138,7 +6134,7 @@ function ImportModal({onClose, onImport, existingLeads}){
     if(f) loadFromFile(f);
   };
 
-  const built = step==='map' ? buildLeadsFromRows({headers, rows, mapping, existingLeads, defaultSource:importDefaultSource}) : null;
+  const built = step==='map' ? buildLeadsFromRows({headers, rows, mapping, existingLeads}) : null;
   // At least ONE of firstName, lastName, fullName must be mapped.
   const nameMapped = !!(mapping.firstName || mapping.lastName || mapping.fullName);
   const canImport = built && nameMapped && built.count>0;
@@ -6302,11 +6298,6 @@ function ImportModal({onClose, onImport, existingLeads}){
               ...headers.map(h => React.createElement('option',{key:h,value:h}, h))
             );
           }
-          const srcDefault = f.key==='source' && React.createElement('div',{style:{display:'grid',gridTemplateColumns:'130px 1fr',gap:10,alignItems:'center'}},
-            React.createElement('div',{style:{fontSize:12,color:'#6b6760'}},'Source if blank'),
-            React.createElement('select',{className:'fse',value:importDefaultSource,onChange:e=>setImportDefaultSource(e.target.value),style:{width:'100%'}},
-              ...LEAD_SOURCES.map(s=>React.createElement('option',{key:s,value:s},s)))
-          );
           return React.createElement(React.Fragment,{key:f.key},
             isFirstNonName && React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'#6b6760',textTransform:'uppercase',letterSpacing:0.5,marginTop:6,marginBottom:0}},'Other Fields'),
             React.createElement('div',{style:{display:'grid',gridTemplateColumns:'130px 1fr',gap:10,alignItems:f.multi?'flex-start':'center'}},
@@ -6315,8 +6306,7 @@ function ImportModal({onClose, onImport, existingLeads}){
                 f.multi && React.createElement('div',{style:{fontSize:10,fontWeight:400,color:'#9a958c',marginTop:2}},'(check all that apply)')
               ),
               control
-            ),
-            srcDefault
+            )
           );
         })
       ),
@@ -8339,8 +8329,7 @@ function CalView({leads,transactions,onSel,onTaskAction,user,db:calDb,onOpenHous
   for(let i=fd-1;i>=0;i--)cells.push({date:new Date(yr,mo-1,dip-i),tm:false});
   for(let d=1;d<=dim;d++)cells.push({date:new Date(yr,mo,d),tm:true});
   const rem=42-cells.length;for(let d=1;d<=rem;d++)cells.push({date:new Date(yr,mo+1,d),tm:false});
-  // Local calendar date (toISOString is UTC and shifts the day in the evening).
-  const ts=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const ts=d=>d.toISOString().slice(0,10);
   const isT=d=>ts(d)===ts(today);
   const upc=useMemo(()=>{
     const t=ts(today);const f=new Date(today);f.setDate(f.getDate()+30);
