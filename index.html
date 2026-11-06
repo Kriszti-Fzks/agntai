@@ -4547,11 +4547,57 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       ['label','action','draftText','aiDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = normalizeDateText(t[k]); });
     });
 
+    // AG-025: fold Closest Deals into Your Tasks (one list, no duplicate panel).
+    // Mark closing-stage leads, ensure any Closest Deal missing from triage still appears once.
+    const closestList = getDealPath(leads,commsMap,transactions);
+    const closestById = {};
+    closestList.forEach((d,i)=>{ closestById[d.lead.id] = {...d, rank:i}; });
+    finalTasks.forEach(t=>{
+      const c = closestById[t.leadId];
+      if(c){
+        t.isClosestDeal = true;
+        t.closestRank = c.rank;
+        t.pinned = true;
+        if(c.pCtx){ t.closestPCtx = c.pCtx; t.closestProtocol = c.protocol; }
+        if(c.action && !t.action) t.action = c.action;
+      }
+    });
+    closestList.forEach(({lead,action,cta,protocol,pCtx}, rank)=>{
+      if(done.includes(lead.id)) return;
+      if(finalTasks.some(t=>t.leadId===lead.id)) return;
+      const CHAN_ICONS = {email:'✉️', sms:'💬', call:'📞', note:'📝'};
+      const ch = pCtx && pCtx.channel;
+      finalTasks.push({
+        id: lead.id+'-closest',
+        leadId: lead.id,
+        leadName: lead.name,
+        leadType: lead.type,
+        priority: 'today',
+        stage: lead.stage,
+        icon: (ch && CHAN_ICONS[ch]) || '🎯',
+        label: 'Closest to closing',
+        action: action || cta || 'Focus here first',
+        isClosestDeal: true,
+        closestRank: rank,
+        pinned: true,
+        isProtocol: !!protocol,
+        protocolChannel: ch || 'sms',
+        closestPCtx: pCtx||null,
+        closestProtocol: protocol||null,
+      });
+    });
+
     const order={critical:0,urgent:1,today:2,followup:3};
-    return finalTasks.sort((a,b)=>(order[a.priority]??99)-(order[b.priority]??99));
+    return finalTasks.sort((a,b)=>{
+      // Closest-to-closing group floats to the top, ordered by deal stage rank
+      if(a.isClosestDeal && !b.isClosestDeal) return -1;
+      if(!a.isClosestDeal && b.isClosestDeal) return 1;
+      if(a.isClosestDeal && b.isClosestDeal) return (a.closestRank??0)-(b.closestRank??0);
+      return (order[a.priority]??99)-(order[b.priority]??99);
+    });
   },[leads,commsMap,done,transactions,triageMap,triagePreviousMap,triageRunning,triageLoaded,triageError]);
 
-  // Text deadlines (AG-043) are pinned so they are never paged out when AI tasks load.
+  // Text deadlines (AG-043) and Closest Deals (AG-025) are pinned so they are never paged out.
   const visibleTasks=useMemo(()=>{const head=allTasks.slice(0,visibleCount);const extra=allTasks.slice(visibleCount).filter(t=>t.pinned);return head.concat(extra);},[allTasks,visibleCount]);
   const remainingCount=allTasks.length-visibleTasks.length;
 
@@ -4561,7 +4607,6 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     return c;
   },[commsMap]);
 
-  const dealPath=useMemo(()=>getDealPath(leads,commsMap,transactions),[leads,commsMap,transactions]);
   const doneCount=done.length;
   const dateStr=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
   const today2str=todayStr;
@@ -4946,16 +4991,34 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
           )
         ),
         React.createElement('div',{className:'tc2-bdg'},
+          t.isClosestDeal&&React.createElement('span',{className:'task-stage',style:{background:'#e8f5ef',color:'#1a6b4a',fontWeight:600}},'Closest to closing'),
           React.createElement('span',{className:'task-stage'},t.stage),
           React.createElement('span',{className:'task-stage',style:{background:tc+'18',color:tc}},t.leadType)
         )
       ),
 
-      // PRIMARY ACTION ROW — what are you doing right now?
+      // PRIMARY ACTION ROW — AG-025: AI Write (inline draft) + Ask AI (assistant coaching) kept as distinct actions on one card
       React.createElement('div',{className:'tc2-btns'},
         React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:ai?600:500},
           onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script))runAI(t);}}},
           isGen?'✨ Writing your message...':ai?'✨ Message ready — tap to view':'✨ AI Write'),
+        onAskAI&&React.createElement('button',{className:'tb2',style:{background:'none',color:'#1a6b4a',border:'1px solid #1a6b4a',fontSize:11,fontWeight:600},
+          onClick:e=>{
+            e.stopPropagation();
+            const leadObj = lead || leads.find(l=>l.id===t.leadId);
+            if(!leadObj) return;
+            let prompt;
+            const pCtx = t.closestPCtx;
+            const protocol = t.closestProtocol;
+            if(pCtx && protocol){
+              const chanLabel = {email:'Email',sms:'Text',call:'Call',note:'Note'}[pCtx.channel] || 'Action';
+              prompt = 'Help me close this deal: '+leadObj.name+' ('+leadObj.type+', '+leadObj.stage+').\n\nProtocol: '+protocol.name+' — Step '+(pCtx.stepIdx+1)+' of '+pCtx.total+'\nChannel: '+chanLabel+'\nObjective: '+pCtx.objective+'\n\nGive me a tailored '+chanLabel.toLowerCase()+' I can use right now, plus quick coaching on how to handle this step well.';
+            } else {
+              prompt = 'Help me with this lead: '+leadObj.name+' ('+leadObj.type+', '+leadObj.stage+').\n\nNext action: '+(t.action||t.label||'')+'\n\nGive me a tailored message I can use right now, plus quick coaching on how to move this lead forward.';
+            }
+            onAskAI(leadObj, prompt);
+          }
+        },'✨ Ask AI'),
         React.createElement('button',{className:'tb2',style:{background:quickLog==='call'?'#10b981':'none',color:quickLog==='call'?'white':'#6b6760',border:'1px solid '+(quickLog==='call'?'#10b981':'#e8e6e2'),fontSize:11},
           onClick:e=>{e.stopPropagation();doQuickLog('call');}},'📞 Called'),
         React.createElement('button',{className:'tb2',style:{background:quickLog==='sms'?'#2563eb':'none',color:quickLog==='sms'?'white':'#6b6760',border:'1px solid '+(quickLog==='sms'?'#2563eb':'#e8e6e2'),fontSize:11},
@@ -5375,35 +5438,6 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       })
     )
     ),
-    dealPath.length>0&&React.createElement('div',{className:'dp tv-fade tv-fade-2'},
-      React.createElement('div',{className:'dp-ttl'},'Closest Deals to Closing — Focus Here First'),
-      ...dealPath.map(({lead,action,cta,protocol,pCtx})=>{
-        const tc=TC[lead.type];
-        return React.createElement('div',{key:lead.id,className:'dp-item'},
-          React.createElement('span',{className:'dp-bdg',style:{background:tc+'18',color:tc}},lead.type),
-          React.createElement('div',{className:'dp-inf',style:{cursor:'pointer'},onClick:()=>onSel(lead.id),title:'Click name to open lead details'},
-            React.createElement('div',{className:'dp-nm'},lead.name),
-            React.createElement('div',{className:'dp-stg'},lead.stage)
-          ),
-          React.createElement('div',{className:'dp-act'},action),
-          React.createElement('button',{
-            onClick:e=>{
-              e.stopPropagation();
-              if(!onAskAI) return;
-              let prompt;
-              if(pCtx && protocol){
-                const chanLabel = {email:'Email',sms:'Text',call:'Call',note:'Note'}[pCtx.channel] || 'Action';
-                prompt = `Help me close this deal: ${lead.name} (${lead.type}, ${lead.stage}).\n\nProtocol: ${protocol.name} — Step ${pCtx.stepIdx+1} of ${pCtx.total}\nChannel: ${chanLabel}\nObjective: ${pCtx.objective}\n\nGive me a tailored ${chanLabel.toLowerCase()} I can use right now, plus quick coaching on how to handle this step well.`;
-              } else {
-                prompt = `Help me close this deal: ${lead.name} (${lead.type}, ${lead.stage}).\n\nNext action: ${action}\n\nGive me a tailored message I can use right now, plus quick coaching on how to move this lead forward.`;
-              }
-              onAskAI(lead, prompt);
-            },
-            style:{background:'#1a6b4a',color:'white',border:'none',borderRadius:6,padding:'7px 12px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0,whiteSpace:'nowrap'}
-          },'✨ Ask AI')
-        );
-      })
-    ),
     txCards.filter(c=>c.tx.side!=='tenant'&&c.tx.side!=='landlord').length>0&&React.createElement('div',{className:'tv-fade tv-fade-3',style:{marginBottom:12}},
       React.createElement('div',{className:'tsec-t'},'Active Transactions'),
       ...txCards.filter(c=>c.tx.side!=='tenant'&&c.tx.side!=='landlord').map(({tx,lead,urgency,message,done:txD,total:txT})=>{
@@ -5450,7 +5484,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     isLoading&&React.createElement('div',{style:{textAlign:'center',padding:'40px 20px',color:'#a09d98'}},React.createElement('div',{style:{fontSize:24,marginBottom:8}},'⏳'),React.createElement('div',{style:{fontSize:13}},'Loading your leads...')),
     !isLoading&&visibleTasks.length===0&&React.createElement('div',{className:'empty-tv'},React.createElement('div',{style:{fontSize:40}},'🎉'),React.createElement('div',{style:{fontSize:15,fontWeight:600,color:'#1a1916',marginBottom:5}},'You are all caught up!'),React.createElement('div',null,'No tasks right now. Great work.')),
     !isLoading&&visibleTasks.length>0&&React.createElement('div',{className:'tsec tv-fade tv-fade-4'},
-      React.createElement('div',{className:'tsec-t'},'Your Tasks ',React.createElement('span',null,visibleTasks.length+(remainingCount>0?' of '+allTasks.length:''))),
+      React.createElement('div',{className:'tsec-t'},'Your Tasks ',React.createElement('span',null,visibleTasks.length+(remainingCount>0?' of '+allTasks.length:'')), allTasks.some(t=>t.isClosestDeal)&&React.createElement('span',{style:{background:'#e8f5ef',color:'#1a6b4a',marginLeft:4}},'Closest to closing first')),
       ...visibleTasks.map(t=>React.createElement(Card,{key:t.id,t}))
     ),
     !isLoading&&remainingCount>0&&React.createElement('div',{style:{textAlign:'center',padding:'16px 0 8px'}},
