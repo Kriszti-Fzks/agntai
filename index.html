@@ -1934,7 +1934,7 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
   const _lcValid = _lcDates.filter(d => !isNaN(d));
   const _lcLatest = _lcValid.length ? new Date(Math.max(..._lcValid.map(d=>d.getTime()))) : null;
   const lastContactStr = _lcLatest
-    ? _triageFormatDate(_lcLatest.toISOString(), today) + ' (' + Math.max(0, Math.floor((today - _lcLatest)/86400000)) + ' days ago)'
+    ? _triageFormatDate(_lcLatest.toISOString(), today) // AG-078: already includes "(N days ago)"; was duplicated
     : 'never (just imported / no contact history)';
 
   const notes = (lead.notes||'').trim();
@@ -1957,6 +1957,7 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
 function _triageSystemPrompt(agentName, today) {
   const todayStr = today.toDateString();
   return `You are a senior real estate coach helping ${agentName||'an agent'} decide what to do TODAY for each of their leads. Today is ${todayStr}.
+Date rule (AG-078): never compute or state how many days one date is before/after another (e.g. "two days before last contact") — state each date plainly; a later calendar date is AFTER an earlier one.
 
 For each lead, you read their full picture (stage, notes, communication history, transaction status) and decide one of three things:
 
@@ -2209,6 +2210,9 @@ async function runDailyTriage(leads, transactions, opts={}) {
 // Cost is tiny: ~1 call/day, Haiku, <500 tokens out. Even with caching off this
 // is roughly $0.001 per agent per day.
 // ──────────────────────────────────────────────────────────────────────────────
+function _scanSummaryJudgesDay(t) {
+  return /\b(light|quiet|slow|easy|busy|heavy|calm|full|packed|open)\s+(day|morning|afternoon|schedule)\b|\bnothing else\b|\bonly (one|1|a single)\b/i.test(String(t||''));
+}
 async function runMorningScan(leads, transactions, opts={}) {
   const today = new Date();
   const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
@@ -2268,7 +2272,7 @@ ${lines.join('\n')}
 Respond with JSON ONLY (no markdown, no fences) in this shape:
 
 {
-  "summary": "<one sentence overview of the day — e.g. 'Busy morning: listing appointment at 10am and an inspection deadline tomorrow.'>",
+  "summary": "<one sentence about ONLY the scheduled items listed above — e.g. 'Listing appointment at 10am and an inspection deadline tomorrow.' Do NOT judge the overall workload (never 'light day', 'quiet day', 'busy day') — the agent has other lead tasks you cannot see.>",
   "today": [
     { "itemId": "<exact id from input>", "prep": "<one short prep note>", "urgency": "high" | "medium" | "low" }
   ],
@@ -3212,7 +3216,7 @@ function fmtLeadDate(d) {
 // AG-045: SMS self-intro from the profile name only (never the login email or "Agntai").
 function _smsIntro() {
   const n = ((window._AGENT && window._AGENT.profileName) || '').trim();
-  return n ? 'This is ' + n.split(' ')[0] + ' ' : '';
+  return n ? 'This is ' + n + ' ' : '';
 }
 function leadGreetingName(leadOrName) {
   const obj = (leadOrName && typeof leadOrName === 'object') ? leadOrName : null;
@@ -3417,13 +3421,14 @@ const AI_SIGNATURE_RULES = () => {
   const s = getAgentSignature();
   return `SIGNATURE / SELF-INTRODUCTION RULES:
 - Introduce yourself as "${s.intro}". Sign EMAILS as "${s.sig}".
-- TEXT MESSAGES (SMS) get NO signature or sign-off block — a text may end with just the first name "${(s.name||'').split(' ')[0]}" only if it reads naturally (AG-019).
+- TEXT MESSAGES (SMS) get NO signature or sign-off block (AG-019). When a text introduces the agent, use the FULL name "${s.name}" exactly (e.g. "Hi Faye, it's ${s.name}"), never a shortened first name alone (AG-045).
 - NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
 - If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.
 - ${s.brokerage ? 'The brokerage is "'+s.brokerage+'".' : 'No brokerage is set: do NOT mention any brokerage and NEVER write a placeholder like "[Brokerage]".'} Never output any other bracketed placeholder such as [Brokerage], [Company] or [Phone].`;
 };
 // ── AG-054: grounding rules shared by every AI writer ───────────────────────
 const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than being vague):
+- Never compute or state how many days one date is before/after another date (e.g. "two days before last contact"). Just state each date plainly. Remember a later calendar date is AFTER an earlier one (Nov 4 is after Oct 30) (AG-078).
 - Use ONLY facts explicitly present in the data provided for THIS client. Do not invent or assume anything.
 - Never state that a step is done, passed, removed, signed, sent, approved or "behind us" unless the data explicitly says so. An upcoming deadline means the item is still OPEN.
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
@@ -5363,7 +5368,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         '📅 Today\'s schedule',
         morningScanRunning && React.createElement('span',{style:{fontSize:11,fontWeight:400,color:'#6b6760'}},' · refreshing…')
       ),
-      morningScan.summary && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
+      // AG-077: the scan only sees calendar items, so drop summaries that judge the whole day
+      // (e.g. "Light day with one follow-up") — they contradict the Today task counters.
+      morningScan.summary && !_scanSummaryJudgesDay(morningScan.summary) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
       // Render today's items. Prefer the AI-annotated `today` list; fall back to raw items for today.
       (() => {
         const d = new Date();
