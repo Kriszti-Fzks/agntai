@@ -3775,18 +3775,11 @@ function genProtocolTasks(leads, protocolComms, transactions) {
 const DEAL_ORDER=['Under Contract','Active Listing','Active Rental Listing','Lease Signed','Buyer Rep Signed','Listing Agreement Signed','Application Submitted','Showing Homes','Showing Rentals','Touring Properties','Listing Appointment','Searching Deals','Rental Evaluation','Spoke With Lead','Spoke with Lead','New','Lead','Nurture','Closed'];
 function getDealPath(leads, commsMap, transactions){
   const cm = commsMap || {};
-  // Only leads in stages that represent real active deal progress toward closing.
-  // Excludes New, Contacted, Spoke With Lead, Nurture, Closed — those aren't "close to closing"
-  // and showing them here is misleading. They belong in the regular Today cards.
+  // AG-025: "Closest to closing" is only the stages truly nearest closing
+  // (under contract / escrow / pending). Broader mid-pipeline stages like
+  // Showing Homes or Lease Signed stay in Your Tasks without this badge.
   const CLOSING_STAGES = new Set([
     'Under Contract',
-    'Active Listing','Active Rental Listing',
-    'Lease Signed',
-    'Buyer Rep Signed','Listing Agreement Signed',
-    'Application Submitted',
-    'Showing Homes','Showing Rentals','Touring Properties',
-    'Listing Appointment',
-    'Searching Deals','Rental Evaluation',
   ]);
   return leads.filter(l => CLOSING_STAGES.has(l.stage))
     .sort((a,b)=>DEAL_ORDER.indexOf(a.stage)-DEAL_ORDER.indexOf(b.stage))
@@ -4580,8 +4573,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         isClosestDeal: true,
         closestRank: rank,
         pinned: true,
-        isProtocol: !!protocol,
-        protocolChannel: ch || 'sms',
+        // Do not set isProtocol without a timingBadge — that rendered "SMS · undefined"
+        protocolChannel: ch || null,
         closestPCtx: pCtx||null,
         closestProtocol: protocol||null,
       });
@@ -4868,6 +4861,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     // ────────────────────────────────────────────────────────────────────────
 
     // CONFIRM CARD — special render path. Replaces the regular task layout.
+    // AG-025: keep Closest-to-closing badge + AI Write / Ask AI even on Needs input cards.
     if(t.isConfirm) {
       return React.createElement('div',{className:`tc2 ${cl}`,style:t.isFaded?{opacity:0.45,pointerEvents:'none'}:{}},
         React.createElement('div',{className:'tc2-top'},
@@ -4883,7 +4877,28 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               React.createElement('div',{className:'tc2-act'}, t.reason || 'AI needs your input before deciding what to do today.')
             )
           ),
-          React.createElement('span',{className:'tc2-bd '+cl}, 'Needs input')
+          React.createElement('div',{className:'tc2-bdg'},
+            t.isClosestDeal&&React.createElement('span',{className:'task-stage',style:{background:'#e8f5ef',color:'#1a6b4a',fontWeight:600}},'Closest to closing'),
+            React.createElement('span',{className:'tc2-bd '+cl}, 'Needs input')
+          )
+        ),
+        React.createElement('div',{className:'tc2-btns',style:{marginTop:10}},
+          React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:600},
+            onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);}}},
+            isGen?'✨ Writing your message...':'✨ AI Write'),
+          onAskAI&&React.createElement('button',{className:'tb2',style:{background:'none',color:'#1a6b4a',border:'1px solid #1a6b4a',fontSize:11,fontWeight:600},
+            onClick:e=>{
+              e.stopPropagation();
+              const leadObj = lead || leads.find(l=>l.id===t.leadId);
+              if(!leadObj) return;
+              const prompt = 'Help me with this lead: '+leadObj.name+' ('+leadObj.type+', '+leadObj.stage+').\n\nAI needs input: '+(t.confirmQuestion||t.action||'')+'\n\nGive me quick coaching on what to do next.';
+              onAskAI(leadObj, prompt);
+            }
+          },'✨ Ask AI')
+        ),
+        // Show AI draft panel when opened from AI Write on a confirm card
+        isOpen&&(ai||t.draftText||t.followUpDraft)&&React.createElement('div',{style:{marginTop:10,padding:'10px 12px',background:'#f8f7f5',border:'1px solid #e8e6e2',borderRadius:8,fontSize:13,lineHeight:1.55,whiteSpace:'pre-wrap'}},
+          (ai&&(ai.text||ai.email_body||ai.call_script)) || t.followUpDraft || t.draftText || ''
         ),
 
         // Two-button row: Yes vs No (only when not yet answered)
@@ -4982,9 +4997,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             React.createElement('div',{className:'tc2-act'},t.action),
             (t.textDeadlines||[]).map(dl=>React.createElement('div',{key:dl.id,style:{marginTop:5,fontSize:11,fontWeight:600,color:dl.diff<=3?'#dc2626':'#b45309'}},
               (dl.isLease?'🔄 ':'⏰ ')+dl.text+(String(dl.text).includes(dl.when)||String(dl.text).includes(dl.when.replace(/, \d{4}$/,''))?'':' — '+dl.when)+(dl.diff===0?' (today)':' ('+dl.diff+' day'+(dl.diff===1?'':'s')+')'))),
-            t.isProtocol&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:5}},
+            t.isProtocol&&t.protocolChannel&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:5}},
               React.createElement('span',{style:{fontSize:10,background:'#f0faf5',border:'1px solid #bbf0d8',borderRadius:10,padding:'1px 7px',color:'#1a6b4a',fontWeight:600}},
-                (CHAN[t.protocolChannel]||'📋')+' '+t.protocolChannel.toUpperCase()+' · '+t.timingBadge
+                (CHAN[t.protocolChannel]||'📋')+' '+String(t.protocolChannel).toUpperCase()+(t.timingBadge ? ' · '+t.timingBadge : '')
               ),
               t.stepAlreadyDone&&React.createElement('span',{style:{fontSize:10,background:'#fffbf0',border:'1px solid #fde68a',borderRadius:10,padding:'1px 7px',color:'#d97706',fontWeight:500}},'✓ Looks done — advance?')
             )
@@ -4999,9 +5014,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
 
       // PRIMARY ACTION ROW — AG-025: AI Write (inline draft) + Ask AI (assistant coaching) kept as distinct actions on one card
       React.createElement('div',{className:'tc2-btns'},
-        React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:ai?600:500},
-          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script))runAI(t);}}},
-          isGen?'✨ Writing your message...':ai?'✨ Message ready — tap to view':'✨ AI Write'),
+        React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:600},
+          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);}}},
+          isGen?'✨ Writing your message...':'✨ AI Write'),
         onAskAI&&React.createElement('button',{className:'tb2',style:{background:'none',color:'#1a6b4a',border:'1px solid #1a6b4a',fontSize:11,fontWeight:600},
           onClick:e=>{
             e.stopPropagation();
