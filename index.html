@@ -535,6 +535,7 @@ select.fs{padding:7px 9px;border:1px solid #e8e6e2;border-radius:6px;background:
 .vlb:hover{background:#e8f5ef;border-color:#1a6b4a;color:#1a6b4a;}
 .emc{text-align:center;padding:30px 20px;color:#a09d98;font-size:13px;}
 /* Scheduled tasks — distinguished from appointments by a left bar and a small icon */
+.cev.openhouse{background:#ccfbf1;color:#115e59;}
 .cev.task{background:#fff7ed;color:#9a3412;position:relative;padding-left:14px;}
 .cev.task::before{content:'';position:absolute;left:3px;top:50%;transform:translateY(-50%);width:5px;height:5px;border-radius:50%;background:#f97316;}
 .cev.task.pending{background:repeating-linear-gradient(45deg,#fff7ed,#fff7ed 4px,#fef3e8 4px,#fef3e8 7px);color:#9a3412;font-style:italic;border:1px dashed #fdba74;padding:1px 4px 1px 13px;}
@@ -1113,8 +1114,8 @@ function _textDeadlinesForLead(lead) {
   const out = [];
   const seen = new Set();
   const add = (m, sourceField) => {
-    if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
     const isLease = _LEASE_RE.test(m.sentence||'');
+    if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
     if(sourceField === 'notes' && !isLease) return; // notes: only lease ends
     const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
     if(seen.has(key)) return;
@@ -1145,6 +1146,22 @@ function _textDeadlinesForLead(lead) {
   return out;
 }
 
+// AG-074: open_houses rows → calendar items (no lead attached).
+function openHouseCalendarItems(openHouses) {
+  return (openHouses||[]).filter(oh => oh && oh.date).map(oh => ({
+    id: 'oh_'+oh.id,
+    date: String(oh.date).slice(0,10),
+    time: oh.time || null,
+    source: 'openhouse',
+    status: 'confirmed',
+    type: 'Open House',
+    label: 'Open House',
+    notes: oh.address || '',
+    lead: null,
+    leadId: null,
+    raw: oh,
+  }));
+}
 function buildCalendarItems(leads, transactions) {
   const items = [];
   (leads||[]).forEach(lead => {
@@ -1189,7 +1206,9 @@ function buildCalendarItems(leads, transactions) {
   const txLeadIds = new Set((transactions||[]).map(tx => tx.lead_id).filter(Boolean));
   (leads||[]).forEach(lead => {
     if(lead.isDemo || txLeadIds.has(lead.id) || lead.stage === 'Closed') return;
-    _textDeadlinesForLead(lead).forEach(it => items.push(it));
+    // AG-047: don't double-list a Next Step date that already has a scheduled task.
+    const _taskDates = new Set((lead.scheduledTasks||[]).filter(t => t.status!=='dismissed' && t.status!=='done').map(t => t.dueDate));
+    _textDeadlinesForLead(lead).forEach(it => { if(!_taskDates.has(it.date)) items.push(it); });
   });
   (transactions||[]).forEach(tx => {
     const lead = (leads||[]).find(l => l.id === tx.lead_id);
@@ -1892,7 +1911,6 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
     `ACTIVE TX: side=${tx.side||'?'} status=${tx.status||'?'}`,
     ...deadlineLines,
   ].join('\n') : (tx ? `ACTIVE TX: side=${tx.side||'?'} status=${tx.status||'?'} (no near-term deadlines)` : '');
-
   // Last contact = newest of the lead's lastContact field and any logged comm,
   // so the AI can't say "no contact logged" when a date exists.
   const _lcDates = [];
@@ -1901,7 +1919,7 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
   const _lcValid = _lcDates.filter(d => !isNaN(d));
   const _lcLatest = _lcValid.length ? new Date(Math.max(..._lcValid.map(d=>d.getTime()))) : null;
   const lastContactStr = _lcLatest
-    ? _triageFormatDate(_lcLatest.toISOString(), today) + ' (' + Math.max(0, Math.floor((today - _lcLatest)/86400000)) + ' days ago)'
+    ? _triageFormatDate(_lcLatest.toISOString(), today) // AG-078: already includes "(N days ago)"; was duplicated
     : 'never (just imported / no contact history)';
 
   const notes = (lead.notes||'').trim();
@@ -1923,6 +1941,7 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
 function _triageSystemPrompt(agentName, today) {
   const todayStr = today.toDateString();
   return `You are a senior real estate coach helping ${agentName||'an agent'} decide what to do TODAY for each of their leads. Today is ${todayStr}.
+Date rule (AG-078): never compute or state how many days one date is before/after another (e.g. "two days before last contact") — state each date plainly; a later calendar date is AFTER an earlier one.
 
 For each lead, you read their full picture (stage, notes, communication history, transaction status) and decide one of three things:
 
@@ -2175,6 +2194,10 @@ async function runDailyTriage(leads, transactions, opts={}) {
 // Cost is tiny: ~1 call/day, Haiku, <500 tokens out. Even with caching off this
 // is roughly $0.001 per agent per day.
 // ──────────────────────────────────────────────────────────────────────────────
+function _scanSummaryJudgesDay(t) {
+  // Only whole-day workload verdicts; specific schedule facts ("only one showing at 2pm") stay.
+  return /^\s*(a\s+)?(light|quiet|slow|easy|busy|heavy|packed)\s+(day|morning|afternoon)\b/i.test(String(t||''));
+}
 async function runMorningScan(leads, transactions, opts={}) {
   const today = new Date();
   const todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
@@ -2234,7 +2257,7 @@ ${lines.join('\n')}
 Respond with JSON ONLY (no markdown, no fences) in this shape:
 
 {
-  "summary": "<one sentence overview of the day — e.g. 'Busy morning: listing appointment at 10am and an inspection deadline tomorrow.'>",
+  "summary": "<one sentence about ONLY the scheduled items listed above — e.g. 'Listing appointment at 10am and an inspection deadline tomorrow.' Do NOT judge the overall workload (never 'light day', 'quiet day', 'busy day') — the agent has other lead tasks you cannot see.>",
   "today": [
     { "itemId": "<exact id from input>", "prep": "<one short prep note>", "urgency": "high" | "medium" | "low" }
   ],
@@ -3164,6 +3187,26 @@ const _ENTITY_RE = /\b(estate|trust|llc|l\.l\.c\.|inc|inc\.|corp|corporation|com
 // LOCAL `fmt` (markdown renderer) that shadows the global date `fmt`, which made
 // the assistant crash (blank page) when this used `fmt`.
 // "Nov 4 ,2026" / "Nov 4,2026" / "Nov 29 2026" → "Nov 4, 2026" / "Nov 29, 2026"
+// AG-078: if a sentence says "<date A> ... N days before/after ... <date B>" and the
+// direction contradicts the calendar, drop only the wrong relative phrase.
+const _MON = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,sept:8,oct:9,nov:10,dec:11};
+const _MD = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\\.?\\s+\\d{1,2}';
+const _REL_ORDER_RE = new RegExp('('+_MD+')([^.!?\\n]{0,80}?)\\b(?:\\d+|one|two|three|four|five|six|seven|a few|several)\\s+days?\\s+(before|after)\\s+([^.!?\\n]{0,40}?)('+_MD+')','gi');
+function _mdValue(md){
+  const m = String(md).match(/^([a-z]+)\.?\s+(\d{1,2})/i); if(!m) return null;
+  const mo = _MON[m[1].slice(0,4).toLowerCase()] ?? _MON[m[1].slice(0,3).toLowerCase()];
+  return mo==null ? null : mo*100 + (+m[2]);
+}
+function fixRelativeDateOrder(t) {
+  return String(t).replace(_REL_ORDER_RE, (all, a, mid, dir, mid2, b) => {
+    const va = _mdValue(a), vb = _mdValue(b);
+    if(va==null || vb==null || va===vb) return all;
+    if(Math.abs(Math.floor(va/100)-Math.floor(vb/100)) > 6) return all; // year boundary: don't guess
+    const actual = va < vb ? 'before' : 'after';
+    if(actual === dir.toLowerCase()) return all;
+    return a + mid.replace(/[\s,;—–-]+$/,'') + ' (' + mid2.trim().replace(/\s*on$/i,'') + (mid2.trim() ? ': ' : '') + b + ')';
+  });
+}
 function normalizeDateText(t) {
   return String(t)
     .replace(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})\s*,\s*(\d{4})\b/g, '$1, $2')
@@ -3174,6 +3217,11 @@ function fmtLeadDate(d) {
   const str = String(d).slice(0,10); const [y,m,dy] = str.split('-');
   const date = (y&&m&&dy) ? new Date(+y,+m-1,+dy) : new Date(d);
   return isNaN(date) ? '' : date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+// AG-045: SMS self-intro from the profile name only (never the login email or "Agntai").
+function _smsIntro() {
+  const n = ((window._AGENT && window._AGENT.profileName) || '').trim();
+  return n ? 'This is ' + n + ' ' : '';
 }
 function leadGreetingName(leadOrName) {
   const obj = (leadOrName && typeof leadOrName === 'object') ? leadOrName : null;
@@ -3378,13 +3426,14 @@ const AI_SIGNATURE_RULES = () => {
   const s = getAgentSignature();
   return `SIGNATURE / SELF-INTRODUCTION RULES:
 - Introduce yourself as "${s.intro}". Sign EMAILS as "${s.sig}".
-- TEXT MESSAGES (SMS) get NO signature or sign-off block — a text may end with just the first name "${(s.name||'').split(' ')[0]}" only if it reads naturally (AG-019).
+- TEXT MESSAGES (SMS) get NO signature or sign-off block (AG-019). When a text introduces the agent, use the FULL name "${s.name}" exactly (e.g. "Hi Faye, it's ${s.name}"), never a shortened first name alone (AG-045).
 - NEVER call the agent "Agntai" (that is the software), never use an email address as a name or brokerage, never write "independent" as a brokerage.
 - If the name is "[Your Name]", keep that placeholder exactly as written so the agent can fill it in.
 - ${s.brokerage ? 'The brokerage is "'+s.brokerage+'".' : 'No brokerage is set: do NOT mention any brokerage and NEVER write a placeholder like "[Brokerage]".'} Never output any other bracketed placeholder such as [Brokerage], [Company] or [Phone].`;
 };
 // ── AG-054: grounding rules shared by every AI writer ───────────────────────
 const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than being vague):
+- Never compute or state how many days one date is before/after another date (e.g. "two days before last contact"). Just state each date plainly. Remember a later calendar date is AFTER an earlier one (Nov 4 is after Oct 30) (AG-078).
 - Use ONLY facts explicitly present in the data provided for THIS client. Do not invent or assume anything.
 - Never state that a step is done, passed, removed, signed, sent, approved or "behind us" unless the data explicitly says so. An upcoming deadline means the item is still OPEN.
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
@@ -3572,9 +3621,9 @@ function genTasks(leads, transactions, noAnswerCounts){
 
     // ── NEW ──────────────────────────────────────────────────────────────────
     if(s==='New'){
-      if(ds>=2)tasks.push({id:lead.id+'-nc',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'critical',label:'CRITICAL — Lead going cold',action:`Call ${n} now — ${ds} days no contact. Window closing fast.`,draftText:`Hi ${n}! This is ${window._AGENT.name} 👋 I saw you were looking at homes in the area — did I catch you at an okay time for a quick chat?`,stage:s,icon:'🔴'});
-      else if(ds>=1)tasks.push({id:lead.id+'-nu',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'urgent',label:'URGENT — Call today',action:`Call ${n} — ${ds} day since lead came in.`,draftText:`Hi ${n}! This is ${window._AGENT.name} 👋 I saw you were interested in homes in the area — do you have 5 minutes for a quick call?`,stage:s,icon:'🔴'});
-      else tasks.push({id:lead.id+'-nt',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'today',label:'New lead — call today',action:`${n} just came in. Call now, find Big Why, set appointment.`,draftText:`Hi ${n}! This is ${window._AGENT.name} 👋 Great to connect! This is my personal cell — save it! 📲`,stage:s,icon:'🟡'});
+      if(ds>=2)tasks.push({id:lead.id+'-nc',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'critical',label:'CRITICAL — Lead going cold',action:`Call ${n} now — ${ds} days no contact. Window closing fast.`,draftText:`Hi ${n}! ${_smsIntro()}👋 I saw you were looking at homes in the area — did I catch you at an okay time for a quick chat?`,stage:s,icon:'🔴'});
+      else if(ds>=1)tasks.push({id:lead.id+'-nu',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'urgent',label:'URGENT — Call today',action:`Call ${n} — ${ds} day since lead came in.`,draftText:`Hi ${n}! ${_smsIntro()}👋 I saw you were interested in homes in the area — do you have 5 minutes for a quick call?`,stage:s,icon:'🔴'});
+      else tasks.push({id:lead.id+'-nt',leadId:lead.id,leadName:lead.name,leadType:lead.type,priority:'today',label:'New lead — call today',action:`${n} just came in. Call now, find Big Why, set appointment.`,draftText:`Hi ${n}! ${_smsIntro()}👋 Great to connect! This is my personal cell — save it! 📲`,stage:s,icon:'🟡'});
     }
 
     // ── SPOKE WITH LEAD ───────────────────────────────────────────────────────
@@ -3902,16 +3951,34 @@ function PipeTracker({leads,onFilter}){
   );
 }
 
+// AG-047 helper (pure): Add Lead form → lead fields + follow-up scheduled task.
+function _addLeadFollowUp(f){
+  const {followUpDate, ...fields} = f;
+  const scheduledTasks = [];
+  if(followUpDate && /^\d{4}-\d{2}-\d{2}$/.test(followUpDate)){
+    const when = new Date(followUpDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    scheduledTasks.push({id:_newTaskId(), dueDate:followUpDate, dueTime:null, type:'Follow-up', label:'Follow up',
+      draftText:'', channel:null, status:'confirmed', source:'manual', sourceRef:'add-lead', createdAt:new Date().toISOString()});
+    if(!(fields.nextStep||'').trim()) fields.nextStep = 'Follow up ' + when;
+  }
+  return {fields, scheduledTasks};
+}
 function AddModal({onClose,onAdd}){
-  const [f,setF]=useState({name:'',phone:'',email:'',source:'Referral',type:'Buyer',stage:'New',notes:'',nextStep:''});
+  const [f,setF]=useState({name:'',phone:'',email:'',source:'Referral',type:'Buyer',stage:'New',notes:'',nextStep:'',followUpDate:''});
   const [tags,setTags]=useState([]);
   const set=(k,v)=>{if(k==='type')setF(x=>({...x,type:v,stage:STAGE_MAP[v][0]}));else setF(x=>({...x,[k]:v}));};
   const sub=()=>{
     if(!f.name.trim())return;
     const id=Date.now().toString();
-    const newLead={id,...f,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
+    // AG-047: the follow-up date becomes a confirmed scheduled task (existing
+    // scheduled_tasks column, no schema change). The agent's Next Step text is never
+    // rewritten; only an EMPTY Next Step gets a default "Follow up <date>".
+    const {fields, scheduledTasks} = _addLeadFollowUp(f);
+    const newLead={id,...fields,scheduledTasks,name:f.name.trim(),tags,lastContact:'',propertiesShared:[],interestedProperties:[],touredProperties:[],appointments:[],documents:[]};
     onAdd(newLead);
     // Scan notes + next-step for date references the agent may want on the calendar.
+    // Scan only what the agent typed (not the auto-filled default) so the follow-up
+    // isn't offered again as a second calendar task.
     const combined = [f.notes, f.nextStep].filter(Boolean).join(' \n ');
     if(combined) detectAndNotify(id, newLead.name, combined, 'new lead');
     onClose();
@@ -3936,6 +4003,7 @@ function AddModal({onClose,onAdd}){
         ),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Source'),React.createElement('select',{className:'fse',value:f.source,onChange:e=>set('source',e.target.value)},...['Lead Magnet','Social','Lead Gen','Open House','SOI','Referral','Website','Other'].map(s=>React.createElement('option',{key:s},s)))),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Next Step'),React.createElement('input',{className:'fi',placeholder:'e.g. Call tomorrow',value:f.nextStep,onChange:e=>set('nextStep',e.target.value)})),
+        React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Follow-up date'),React.createElement('input',{className:'fi',type:'date',value:f.followUpDate,onChange:e=>set('followUpDate',e.target.value)})),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Notes'),React.createElement('textarea',{className:'fi',placeholder:'Budget, timeline, motivation...',value:f.notes,onChange:e=>set('notes',e.target.value),rows:3})),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Tags'),React.createElement(TagInput,{tags,onChange:setTags}))
       ),
@@ -4537,7 +4605,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     // Normalize date punctuation in every task's visible text, including AI
     // decisions cached before the formatter fix ("Nov 4 ,2026", "Nov 29 2026").
     finalTasks.forEach(t => {
-      ['label','action','draftText','aiDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = normalizeDateText(t[k]); });
+      ['label','action','draftText','aiDraft','confirmQuestion','followUpDraft'].forEach(k => { if(typeof t[k] === 'string') t[k] = fixRelativeDateOrder(normalizeDateText(t[k])); });
     });
 
     // AG-025: fold Closest Deals into Your Tasks (one list, no duplicate panel).
@@ -5314,7 +5382,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         '📅 Today\'s schedule',
         morningScanRunning && React.createElement('span',{style:{fontSize:11,fontWeight:400,color:'#6b6760'}},' · refreshing…')
       ),
-      morningScan.summary && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
+      // AG-077: the scan only sees calendar items, so drop summaries that judge the whole day
+      // (e.g. "Light day with one follow-up") — they contradict the Today task counters.
+      morningScan.summary && !_scanSummaryJudgesDay(morningScan.summary) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
       // Render today's items. Prefer the AI-annotated `today` list; fall back to raw items for today.
       (() => {
         const d = new Date();
@@ -5562,6 +5632,7 @@ const IMPORT_FIELDS = [
   {key:'type',      label:'Type',       required:false, aliases:['type','leadtype','lead type','category','role']},
   {key:'stage',     label:'Stage',      required:false, aliases:['stage','status','pipeline']},
   {key:'source',    label:'Source',     required:false, aliases:['source','leadsource','lead source','origin','referredby','referred by']},
+  {key:'nextStep',  label:'Next Step',  required:false, aliases:['next step','nextstep','next action','next steps','follow up','followup','follow-up','to do','todo']},
   {key:'lastContact', label:'Last Contact', required:false, aliases:['last contact','lastcontact','last contacted','last contact date','last touch','last activity']},
   {key:'tags',      label:'Tags',       required:false, aliases:['tags','tag','labels','label','keywords']},
   // Notes is multi: user can map several spreadsheet columns and we'll concatenate.
@@ -5892,7 +5963,7 @@ function buildLeadsFromRows({headers, rows, mapping, existingLeads}){
       // Only set when the spreadsheet provides it (mapped 'lastContact' column).
       lastContact: _importDate(get(row,'lastContact')),
       notes: finalNotes,
-      nextStep: 'Follow up — imported from spreadsheet',
+      nextStep: get(row,'nextStep') || 'Follow up — imported from spreadsheet',
       completedSteps: [],
       tags: allTags,
       // Same array defaults as dbLoadLeads (camelCase) so LeadDetail can open
@@ -8232,15 +8303,25 @@ function DocumentsSection({lead, onUpd}) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function CalView({leads,transactions,onSel,onTaskAction}){
+function CalView({leads,transactions,onSel,onTaskAction,user,db:calDb,onOpenHouses}){
   const today=new Date();
+  // AG-074: open houses live in their own table; load them for the Calendar.
+  const [openHouses,setOpenHouses]=useState([]);
+  useEffect(()=>{
+    if(!user||!user.id||!calDb) return;
+    let alive=true;
+    calDb.from('open_houses').select('*').eq('agent_id',user.id)
+      .then(({data,error})=>{ if(alive&&!error) setOpenHouses(data||[]); })
+      .catch(()=>{});
+    return ()=>{alive=false;};
+  },[user&&user.id]);
   const [cur,setCur]=useState(new Date(today.getFullYear(),today.getMonth(),1));
   const yr=cur.getFullYear(),mo=cur.getMonth();
   const mname=cur.toLocaleDateString('en-US',{month:'long',year:'numeric'});
 
   // Unified calendar items: appointments + scheduled tasks + transaction deadlines.
   // Single source of truth — same shape consumed by morning scan + this view.
-  const all=useMemo(()=>buildCalendarItems(leads,transactions),[leads,transactions]);
+  const all=useMemo(()=>[...buildCalendarItems(leads,transactions),...openHouseCalendarItems(openHouses)],[leads,transactions,openHouses]);
   const byd=useMemo(()=>{const m={};all.forEach(x=>{if(!m[x.date])m[x.date]=[];m[x.date].push(x);});return m;},[all]);
 
   const fd=new Date(yr,mo,1).getDay(),dim=new Date(yr,mo+1,0).getDate(),dip=new Date(yr,mo,0).getDate();
@@ -8273,7 +8354,11 @@ function CalView({leads,transactions,onSel,onTaskAction}){
     } else if(item.source === 'deadline') {
       cls += ' deadline';
       label = `${item.label} · ${leadGreetingName(item.lead)}`;
+    } else if(item.source === 'openhouse') {
+      cls += ' openhouse';
+      label = `🏠 Open House · ${item.notes}`;
     }
+    if(item.source === 'openhouse') return React.createElement('div',{key:item.id,className:cls,title:'Open House — '+item.notes+(item.time?' · '+item.time:''),onClick:()=>onOpenHouses&&onOpenHouses()},label);
     const titleParts = [item.label, '— '+item.lead.name];
     if(item.source==='task' && item.status==='pending') titleParts.push('(AI suggested — pending confirmation)');
     if(item.source==='deadline') titleParts.push(item.fromText ? '(from lead '+(item.fromText==='notes'?'notes':'next step')+')' : '(transaction deadline)');
@@ -8290,6 +8375,15 @@ function CalView({leads,transactions,onSel,onTaskAction}){
     const d=new Date(item.date+'T12:00:00');
     const mon=d.toLocaleDateString('en-US',{month:'short'}).toUpperCase();
     const day=d.getDate();
+    if(item.source==='openhouse') return React.createElement('div',{key:item.id,className:'upi'},
+      React.createElement('div',{className:'upd'},React.createElement('span',{className:'upm'},mon),React.createElement('span',{className:'upn'},day)),
+      React.createElement('div',{style:{width:3,alignSelf:'stretch',borderRadius:2,background:'#0f766e',flexShrink:0}}),
+      React.createElement('div',{className:'upin'},
+        React.createElement('div',{className:'upty'},'Open House'),
+        React.createElement('div',{className:'uplead'},React.createElement('span',{style:{color:'#0f766e',fontWeight:500}},item.notes),item.time?' · '+item.time:'')
+      ),
+      React.createElement('div',{className:'upac tk-act'},onOpenHouses&&React.createElement('button',{className:'vlb',onClick:()=>onOpenHouses()},'View'))
+    );
     const tc = item.source==='deadline' ? '#dc2626'
             : item.source==='task' ? '#f97316'
             : TC[item.lead.type];
@@ -8355,7 +8449,7 @@ function CalView({leads,transactions,onSel,onTaskAction}){
         React.createElement('div',{className:'ct'},'Calendar',
           pendingCount > 0 && React.createElement('span',{className:'tk-badge pending',style:{marginLeft:10,fontSize:10}},pendingCount+' pending')
         ),
-        React.createElement('div',{className:'cs'},'Appointments, scheduled tasks, and transaction deadlines')
+        React.createElement('div',{className:'cs'},'Appointments, scheduled tasks, open houses, and deadlines')
       ),
       React.createElement('div',{className:'cn'},
         React.createElement('button',{className:'ctd',onClick:()=>setCur(new Date(today.getFullYear(),today.getMonth(),1))},'Today'),
@@ -8371,15 +8465,16 @@ function CalView({leads,transactions,onSel,onTaskAction}){
         const da=byd[ds]||[];
         // Sort within day: deadlines first (most urgent), then appointments, then tasks.
         const sorted=[...da].sort((a,b)=>{
-          const ord={deadline:0,appointment:1,task:2};
+          const ord={deadline:0,appointment:1,openhouse:2,task:3};
           return (ord[a.source]||9)-(ord[b.source]||9);
         });
         const sh=sorted.slice(0,2);
         const more=sorted.length-sh.length;
+        const moreLead=sorted.slice(2).find(x=>x.leadId);
         return React.createElement('div',{key:i,className:`cday${!cell.tm?' oth':''}${isT(cell.date)?' tod':''}`},
           React.createElement('div',{className:'cdn'},cell.date.getDate()),
           ...sh.map(renderCell),
-          more>0&&React.createElement('div',{className:'cmore',onClick:()=>onSel(sorted[2].leadId)},`+${more} more`)
+          more>0&&React.createElement('div',{className:'cmore',onClick:()=>moreLead?onSel(moreLead.leadId):(onOpenHouses&&onOpenHouses())},`+${more} more`)
         );
       }))
     ),
@@ -8387,7 +8482,8 @@ function CalView({leads,transactions,onSel,onTaskAction}){
       React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'#dbeafe'}}),'Appointment'),
       React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'#fff7ed',border:'1px solid #fdba74'}}),'Task'),
       React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'repeating-linear-gradient(45deg,#fff7ed,#fff7ed 2px,#fef3e8 2px,#fef3e8 4px)',border:'1px dashed #fdba74'}}),'AI suggested · pending'),
-      React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'#fee2e2'}}),'Deadline')
+      React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'#fee2e2'}}),'Deadline'),
+      React.createElement('span',{className:'cal-legend-item'},React.createElement('span',{className:'cal-legend-swatch',style:{background:'#ccfbf1'}}),'Open House')
     ),
     React.createElement('div',{className:'upc'},
       React.createElement('div',{className:'upct'},`Upcoming — Next 30 Days ${upc.length>0?`(${upc.length})`:''}`),
@@ -8414,7 +8510,7 @@ function AuthLogo(){
     React.createElement('div',{className:'amk'},'RE'),
     React.createElement('div',null,
       React.createElement('span',{className:'an'},'Agntai'),
-      React.createElement('span',{className:'as'},'Pro Platform')
+      React.createElement('span',{className:'as',style:{marginLeft:6}},'Pro Platform')
     )
   );
 }
@@ -8644,7 +8740,7 @@ function AuthPage({onAuth}){
         React.createElement(AuthField,{label:'Full Name *',placeholder:'e.g. Jane Doe',value:fullName,onChange:e=>setFullName(e.target.value)}),
         React.createElement(AuthField,{label:'Email Address *',type:'email',placeholder:'you@email.com',value:email,onChange:e=>setEmail(e.target.value)}),
         React.createElement(AuthField,{label:'Password (min 8 chars) *',type:'password',placeholder:'••••••••',value:password,onChange:e=>setPassword(e.target.value)}),
-        React.createElement(AuthField,{label:'City *',placeholder:'e.g. Dallas, TX',value:city,onChange:e=>setCity(e.target.value)}),
+        React.createElement(AuthField,{label:'City *',placeholder:'e.g. Irvine, CA',value:city,onChange:e=>setCity(e.target.value)}),
 
         // Agent status
         React.createElement('div',{style:{marginBottom:14}},
@@ -8845,7 +8941,7 @@ function ProfileModal({user, onClose, onSave}){
                 React.createElement('span',{style:{fontSize:11,color:'#a09d98'}},'for AI context')
               )
             ),
-            React.createElement('div',{style:{fontSize:11,color:'#6b6760',marginTop:6,lineHeight:1.5}},'When you connect Gmail, Claude AI can read your emails to give better recommendations about lead follow-ups.')
+            React.createElement('div',{style:{fontSize:11,color:'#6b6760',marginTop:6,lineHeight:1.5}},'When you connect Gmail, Agntai\'s AI can read your emails to give better recommendations about lead follow-ups.')
           )
         ),
         err&&React.createElement('div',{style:{padding:'8px 10px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:12,color:'#dc2626'}},err),
@@ -8918,7 +9014,7 @@ function GmailIntegrationModal({onClose, onConnected}) {
   };
 
   const handleDisconnect = async () => {
-    if (!confirm('Are you sure? Claude won\'t be able to read your emails after this.')) return;
+    if (!confirm('Are you sure? Agntai\'s AI won\'t be able to read your emails after this.')) return;
 
     try {
       const { data: { session } } = await db.auth.getSession();
@@ -8945,7 +9041,7 @@ function GmailIntegrationModal({onClose, onConnected}) {
       ),
       React.createElement('div', { className: 'mod-b' },
         React.createElement('div', { style: { fontSize: 13, color: '#6b6760', marginBottom: 16, lineHeight: 1.6 } },
-          'Connect your Gmail account so Claude can read your emails when giving recommendations. This helps with:'
+          'Connect your Gmail account so Agntai\'s AI can read your emails when giving recommendations. This helps with:'
         ),
         React.createElement('ul', { style: { fontSize: 12, color: '#6b6760', margin: '0 0 20px 20px', lineHeight: 1.8 } },
           React.createElement('li', null, 'Understanding lead communication history'),
@@ -11645,7 +11741,7 @@ function IntegrationsView({user,db,handleExportData}){
         style:{padding:'12px 20px',background:'#1a6b4a',color:'white',border:'none',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer',transition:'all 0.2s'}
       },'⬇️ Download Your Data'),
 
-      React.createElement('p',{style:{fontSize:12,color:'#6b6760',marginTop:12,lineHeight:1.6}},'Includes: All leads + full history + documents. File format: JSON. Valid for 24 hours.')
+      React.createElement('p',{style:{fontSize:12,color:'#6b6760',marginTop:12,lineHeight:1.6}},'Includes: All leads + full history + documents. File format: JSON. Downloads straight to your computer.')
     ),
 
     // Email-to-Lead
@@ -12172,7 +12268,7 @@ function App(){
           React.createElement('div',{},
             React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'#92400e',marginBottom:4}},'AI-Generated Suggestions'),
             React.createElement('div',{style:{fontSize:12,color:'#78350f',lineHeight:1.5}},
-              'Claude provides suggestions for follow-ups, pricing, and outreach. Always verify information independently before relying on it for business decisions.'
+              'Agntai\'s AI provides suggestions for follow-ups, pricing, and outreach. Always verify information independently before relying on it for business decisions.'
             )
           )
         ),
@@ -12200,6 +12296,9 @@ function App(){
         :view==='calendar'?React.createElement(CalView,{
           leads,
           transactions,
+          user,
+          db,
+          onOpenHouses:()=>setView('open-houses'),
           onSel:id=>{setSelId(id);setView('crm');},
           onTaskAction:(leadId,taskId,action)=>{
             const lead = leads.find(l=>l.id===leadId);
