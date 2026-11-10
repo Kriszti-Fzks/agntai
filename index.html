@@ -1117,6 +1117,7 @@ function _textDeadlinesForLead(lead) {
     const isLease = _LEASE_RE.test(m.sentence||'');
     if(!_ABS_DATE_RE.test(m.phrase) && !_ABS_DATE_RE.test(m.sentence||'')) return;
     if(sourceField === 'notes' && !isLease) return; // notes: only lease ends
+    if(isLeadDateDismissed(lead.id, m.dateISO, lead)) return;
     const key = m.dateISO + '|' + (isLease ? 'lease' : 'ns');
     if(seen.has(key)) return;
     seen.add(key);
@@ -1474,12 +1475,210 @@ function _actionToChannel(action) {
   return null;
 }
 
+// AG-082: RFC 4180 CSV field quoting / parsing (export + import fallback).
+function csvEscape(v){
+  const t = v==null ? '' : String(v);
+  if(/[",\r\n]/.test(t)) return '"' + t.replace(/"/g,'""') + '"';
+  return t;
+}
+function toCsv(headers, rows){
+  return [headers, ...(rows||[])].map(r => (r||[]).map(csvEscape).join(',')).join('\r\n');
+}
+function parseCsvLine(line){
+  const out = [];
+  let cur = '', i = 0, inQ = false;
+  const str = String(line==null?'':line);
+  while(i < str.length){
+    const ch = str[i];
+    if(inQ){
+      if(ch === '"'){
+        if(str[i+1] === '"'){ cur += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      cur += ch; i++; continue;
+    }
+    if(ch === '"'){ inQ = true; i++; continue; }
+    if(ch === ','){ out.push(cur); cur = ''; i++; continue; }
+    cur += ch; i++;
+  }
+  out.push(cur);
+  return out;
+}
+function parseCsvText(text){
+  const raw = String(text||'').replace(/^\uFEFF/, '');
+  const lines = [];
+  let buf = '', inQ = false;
+  for(let i=0;i<raw.length;i++){
+    const ch = raw[i];
+    if(ch === '"'){
+      if(inQ && raw[i+1] === '"'){ buf += '""'; i++; continue; }
+      inQ = !inQ; buf += ch; continue;
+    }
+    if(!inQ && (ch === '\n' || ch === '\r')){
+      if(ch === '\r' && raw[i+1] === '\n') i++;
+      if(buf.length) lines.push(buf);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  if(buf.length) lines.push(buf);
+  const rows = lines.map(parseCsvLine).filter(r => r.some(c => String(c||'').trim()!==''));
+  if(!rows.length) return {headers:[], rows:[]};
+  const headers = rows[0].map(h => String(h||'').trim());
+  return {headers, rows: rows.slice(1).map(r => headers.map((_,i)=> String(r[i]==null?'':r[i]).trim()))};
+}
+
+// AG-081: parse AI Write JSON, including truncated / lightly malformed output.
+function parseAiWriteJson(raw){
+  if(!raw) return null;
+  const strip = String(raw).replace(/^```(?:json)?\s*/i,'').replace(/\s*```\s*$/,'').trim();
+  const tryParse = (t) => { try { return JSON.parse(t); } catch(e){ return null; } };
+  let obj = tryParse(strip);
+  if(!obj){
+    const m = strip.match(/\{[\s\S]*\}/);
+    if(m) obj = tryParse(m[0]);
+  }
+  // Repair truncated JSON (often cut off in email_body / call_script when tokens run out).
+  if(!obj){
+    let t = strip;
+    const brace = t.indexOf('{');
+    if(brace < 0) return null;
+    if(brace > 0) t = t.slice(brace);
+    const quotes = (t.match(/"/g)||[]).length;
+    if(quotes % 2 === 1) t += '"';
+    const opens = (t.match(/\{/g)||[]).length - (t.match(/\}/g)||[]).length;
+    if(opens > 0) t += '}'.repeat(opens);
+    obj = tryParse(t);
+  }
+  if(!obj || typeof obj !== 'object') return null;
+  const pick = (...keys) => {
+    for(const k of keys){
+      if(typeof obj[k] === 'string' && obj[k].trim()) return obj[k];
+    }
+    return '';
+  };
+  return {
+    text: pick('text','sms','sms_text'),
+    email_subject: pick('email_subject','emailSubject','subject'),
+    email_body: pick('email_body','emailBody','email','body'),
+    call_script: pick('call_script','callScript','script'),
+  };
+}
+
+// AG-080: a dismissed date-detected toast must not reappear as a derived calendar event.
+// Keys: leadId|dateISO (preferred) and the older leadId|dateISO|phrase form.
+// Also honors a scheduled task saved as status 'dismissed' (existing column, no schema change).
+function isLeadDateDismissed(leadId, dateISO, lead){
+  if(!leadId || !dateISO) return false;
+  const date = String(dateISO).slice(0,10);
+  if(((lead && lead.scheduledTasks)||[]).some(t => String(t.dueDate||'').slice(0,10)===date && t.status==='dismissed')) return true;
+  try {
+    if(typeof localStorage === 'undefined') return false;
+    const d = JSON.parse(localStorage.getItem('agntai_date_dismissed')||'{}')||{};
+    const prefix = leadId + '|' + date;
+    return Object.keys(d).some(k => k === prefix || k.startsWith(prefix+'|'));
+  } catch(e) { return false; }
+}
+function rememberDismissedLeadDate(leadId, dateISO, phrase){
+  try {
+    const raw = localStorage.getItem('agntai_date_dismissed')||'{}';
+    const dismissed = JSON.parse(raw)||{};
+    const date = String(dateISO).slice(0,10);
+    dismissed[leadId + '|' + date] = Date.now();
+    if(phrase) dismissed[leadId + '|' + date + '|' + String(phrase).toLowerCase()] = Date.now();
+    localStorage.setItem('agntai_date_dismissed', JSON.stringify(dismissed));
+  } catch(e) {}
+}
+
+// AG-079: calendar + key dates for one lead, classified past/upcoming vs a local today string.
+function localTodayStr(d){
+  const x = d instanceof Date ? d : new Date();
+  return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');
+}
+function formatMdY(iso){
+  const s = String(iso||'').slice(0,10);
+  const [y,m,d] = s.split('-').map(Number);
+  if(!y||!m||!d) return s;
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[m-1]+' '+d+', '+y;
+}
+function daysBetweenLocal(fromISO, toISO){
+  const a = String(fromISO).slice(0,10), b = String(toISO).slice(0,10);
+  const [ay,am,ad]=a.split('-').map(Number), [by,bm,bd]=b.split('-').map(Number);
+  return Math.round((Date.UTC(by,bm-1,bd)-Date.UTC(ay,am-1,ad))/86400000);
+}
+function classifyLeadSchedule(lead, transactions, todayStr){
+  const today = todayStr || localTodayStr(new Date());
+  const txs = (transactions||[]).filter(tx => tx && lead && tx.lead_id === lead.id);
+  const items = (typeof buildCalendarItems === 'function') ? buildCalendarItems(lead?[lead]:[], txs) : [];
+  const labelOf = (it) => {
+    const when = formatMdY(it.date) + (it.time ? ' at '+it.time : '');
+    const diff = daysBetweenLocal(today, it.date);
+    const rel = diff===0 ? 'today' : diff===1 ? 'tomorrow' : diff===-1 ? 'yesterday' : diff>0 ? ('in '+diff+' days') : (Math.abs(diff)+' days ago');
+    const kind = it.source==='appointment' ? 'meeting' : it.source==='task' ? 'task' : (it.isLease ? 'lease end' : (it.source==='deadline' ? 'deadline' : it.source||'event'));
+    return (it.label || it.type || 'Event')+' on '+when+' ('+rel+', '+kind+')'+(it.notes && it.notes!==it.label ? ' — '+String(it.notes).slice(0,80) : '');
+  };
+  const past = items.filter(it => it.date < today).sort((a,b)=>b.date.localeCompare(a.date)).map(labelOf);
+  const upcomingMeetings = items.filter(it => it.date >= today && it.source==='appointment').sort((a,b)=>a.date.localeCompare(b.date)).map(labelOf);
+  const upcomingOther = items.filter(it => it.date >= today && it.source!=='appointment').sort((a,b)=>a.date.localeCompare(b.date)).map(labelOf);
+  // Transaction key dates with the correct label (lease vs close of escrow).
+  const keyDates = [];
+  txs.forEach(tx => {
+    const isLease = tx.side==='tenant' || tx.side==='landlord';
+    const rows = [
+      ['Deposit Due', tx.deposit_due_date],
+      ['Inspection Removal', tx.inspection_removal_date],
+      ['Appraisal Removal', tx.appraisal_removal_date],
+      ['Loan Removal', tx.loan_removal_date],
+      [isLease ? 'Lease Ends' : 'Close of Escrow', tx.close_date],
+    ];
+    rows.forEach(([lab, date]) => {
+      if(!date) return;
+      const ds = String(date).slice(0,10);
+      const diff = daysBetweenLocal(today, ds);
+      const rel = diff===0 ? 'today' : diff>0 ? ('in '+diff+' days') : (Math.abs(diff)+' days ago');
+      const when = ds < today ? 'PAST' : 'UPCOMING';
+      keyDates.push(when+': '+lab+' on '+formatMdY(ds)+' ('+rel+')');
+    });
+  });
+  return {today, past, upcomingMeetings, upcomingOther, keyDates, itemCount: items.length};
+}
+function formatLeadScheduleForAI(lead, transactions, todayStr){
+  const c = classifyLeadSchedule(lead, transactions, todayStr);
+  const lines = [
+    'TODAY (agent local date): '+c.today,
+    'CALENDAR FOR THIS LEAD (source of truth — never invent a date or time that is not listed here):',
+    c.past.length ? ('PAST: '+c.past.join('; ')) : 'PAST: none',
+    c.upcomingMeetings.length ? ('UPCOMING MEETINGS: '+c.upcomingMeetings.join('; ')) : 'UPCOMING MEETINGS: none',
+    c.upcomingOther.length ? ('OTHER UPCOMING DATES: '+c.upcomingOther.join('; ')) : 'OTHER UPCOMING DATES: none',
+    c.keyDates.length ? ('TRANSACTION KEY DATES: '+c.keyDates.join('; ')) : 'TRANSACTION KEY DATES: none',
+    'If asked when the next meeting is and UPCOMING MEETINGS is none, say there is no upcoming meeting on the calendar. Do not invent one. Do not treat a past meeting, a deadline, or a relative phrase in notes ("in 3 days", "this week") as a future meeting if it conflicts with the calendar above.',
+  ];
+  return lines.join('\n');
+}
+
+// AG-077: cached morning-scan summary is stale if today's calendar items changed since the scan.
+function morningScanIsStale(scan, leads, transactions, todayStr){
+  if(!scan || !Array.isArray(scan.items)) return false;
+  const today = todayStr || localTodayStr(new Date());
+  const horizonDays = (scan.horizonDays!=null) ? scan.horizonDays : 2;
+  const [ty,tm,td]=today.split('-').map(Number);
+  const h = new Date(ty, tm-1, td + horizonDays);
+  const horizon = localTodayStr(h);
+  const nowIds = new Set((buildCalendarItems(leads, transactions)||[]).filter(it => it.date>=today && it.date<=horizon).map(it => it.id));
+  const oldIds = new Set((scan.items||[]).map(it => it.id));
+  if(nowIds.size !== oldIds.size) return true;
+  for(const id of nowIds){ if(!oldIds.has(id)) return true; }
+  return false;
+}
+
 // Fire-and-forget: scan text, dispatch a `date-detected` window event for any
 // matches found. The global popup listener picks it up. Call this from any save
 // path (note save, comm log, next-step save) right after the save completes.
 //
 // Suppression: each user-dismissal stores a key in localStorage; we never ask
-// about the same (leadId + phrase) combo twice.
+// about the same (leadId + date) combo twice.
 function detectAndNotify(leadId, leadName, text, sourceLabel) {
   try {
     if(!text || !leadId) return;
@@ -1490,10 +1689,7 @@ function detectAndNotify(leadId, leadName, text, sourceLabel) {
     const dismissedRaw = localStorage.getItem('agntai_date_dismissed') || '{}';
     let dismissed = {};
     try { dismissed = JSON.parse(dismissedRaw)||{}; } catch(e){}
-    const fresh = matches.filter(m => {
-      const k = leadId + '|' + m.dateISO + '|' + m.phrase.toLowerCase();
-      return !dismissed[k];
-    });
+    const fresh = matches.filter(m => !isLeadDateDismissed(leadId, m.dateISO));
     if(!fresh.length) { console.log('[DateDetect] all matches previously dismissed — skipping popup'); return; }
     console.log('[DateDetect] dispatching popup with', fresh.length, 'match(es)');
     window.dispatchEvent(new CustomEvent('date-detected', {
@@ -3502,16 +3698,39 @@ OUTPUT FORMAT — respond with ONLY this JSON, no other text:
   "call_script": "Full phone script:\\nOPENER: [what to say first 5 seconds]\\nWHY I'M CALLING: [specific reason referencing their situation and transaction]\\nKEY QUESTION: [one powerful question to ask]\\nOBJECTION HANDLER: [if they say they're busy or not interested]\\nCLOSE: [how to end the call with a next step]"
 }`;
 
-  const raw = await callClaude(prompt, 1200);
-  if(!raw) return null;
-  try {
-    const clean = raw.replace(/```json|```/g,'').trim();
-    return JSON.parse(clean);
-  } catch(e) {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if(match) { try { return JSON.parse(match[0]); } catch(e2) {} }
-    return null;
+  const runOnce = async (p, tokens) => {
+    const { data } = await callAnthropic({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: tokens,
+      messages: [{ role: 'user', content: p }],
+    });
+    const raw = (data && data.content && data.content[0] && data.content[0].text) ? data.content[0].text.trim() : '';
+    const parsed = parseAiWriteJson(raw) || {};
+    parsed._stop = data && data.stop_reason;
+    parsed._raw = raw;
+    return parsed;
+  };
+  await checkAIActionLimit();
+  let content = await runOnce(prompt, 4000);
+  // If the email body is missing (truncated JSON, wrong key, or empty), retry email-only once.
+  if(!(content.email_body||'').trim()){
+    const emailOnly = `Rewrite ONLY the email for this same lead. Return ONLY JSON, no markdown:
+{"email_subject":"Short compelling subject","email_body":"Professional but warm email, 3-4 short paragraphs, clear call to action, end with the agent signature."}
+
+Lead: ${ctx.name}. Notes: ${(ctx.notes||'').slice(0,500)}. Next step: ${ctx.prevNextStep||'none'}.
+${AI_SIGNATURE_RULES()}
+${AI_FACT_RULES}`;
+    try {
+      await checkAIActionLimit();
+      const retry = await runOnce(emailOnly, 2000);
+      if((retry.email_body||'').trim()){
+        content.email_body = retry.email_body;
+        if((retry.email_subject||'').trim()) content.email_subject = retry.email_subject;
+      }
+    } catch(e) { console.warn('[AI Write] email retry failed', e); }
   }
+  if(!(content.text||'').trim() && !(content.email_body||'').trim() && !(content.call_script||'').trim()) return null;
+  return content;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -4762,8 +4981,13 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     try{
       const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),60000));
       const content=await Promise.race([generateAIContent(lead,t,leadTx),timeout]);
-      if(content)setAiContent(p=>({...p,[t.id]:content}));
-      else setAiError(p=>({...p,[t.id]:"Couldn't write this message right now. Please try again in a moment."}));
+      if(content){
+        setAiContent(p=>({...p,[t.id]:content}));
+        // AG-081: never silently show Subject "Following up" with an empty body.
+        if(!(content.email_body||'').trim()){
+          setAiError(p=>({...p,[t.id]:"The email draft came back empty. Click Retry to try again."}));
+        }
+      } else setAiError(p=>({...p,[t.id]:"Couldn't write this message right now. Please try again in a moment."}));
     }catch(e){
       const msg=e&&e.message&&e.message.includes('beta limit')?e.message
         :e&&e.message==='timeout'?'The AI is taking too long. Please try again.'
@@ -5271,7 +5495,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             // EMAIL TAB
             tab==='email'&&React.createElement(React.Fragment,null,
               !ai&&!t.draftText&&React.createElement('div',{style:{textAlign:'center',padding:'20px 0',color:'#a09d98',fontSize:13}},'Click ✨ AI Write to generate a personalized email'),
-              (ai||t.draftText)&&React.createElement(React.Fragment,null,
+              ai&&!(emailBody||'').trim()&&React.createElement('div',{style:{textAlign:'center',padding:'16px 0'}},
+                React.createElement('div',{style:{fontSize:13,color:'#b91c1c',marginBottom:8}},'The email draft came back empty.'),
+                React.createElement('button',{onClick:e=>{e.stopPropagation();runAI(t);},style:{fontSize:12,padding:'6px 14px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}},'Retry email')
+              ),
+              (ai||t.draftText)&&!(!emailBody&&ai)&&React.createElement(React.Fragment,null,
                 React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}},
                   React.createElement('div',{className:'scr-lbl',style:{color:ai?'#7c3aed':'#6b6760',margin:0}},ai?'✨ AI draft — edit freely below':'📋 Template — edit freely below'),
                   !ai&&React.createElement('button',{onClick:e=>{e.stopPropagation();runAI(t);},style:{fontSize:11,padding:'3px 10px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}},'✨ Personalize with AI')
@@ -5384,7 +5612,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       ),
       // AG-077: the scan only sees calendar items, so drop summaries that judge the whole day
       // (e.g. "Light day with one follow-up") — they contradict the Today task counters.
-      morningScan.summary && !_scanSummaryJudgesDay(morningScan.summary) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
+      // AG-077: hide workload-verdict summaries, and don't show a stale sentence once the calendar has changed.
+      !morningScanIsStale(morningScan, leads, transactions) && morningScan.summary && !_scanSummaryJudgesDay(morningScan.summary) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
+      morningScanIsStale(morningScan, leads, transactions) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}},
+        'Schedule changed since '+(morningScan.timestamp ? new Date(morningScan.timestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : 'the last scan')+' — Refresh scan to update this summary.'
+      ),
       // Render today's items. Prefer the AI-annotated `today` list; fall back to raw items for today.
       (() => {
         const d = new Date();
@@ -5456,6 +5688,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               ? React.createElement('div',{style:{color:'#065f46'}},
                   React.createElement('strong',null,'✨ AI set up your day.'),
                   ' ',Object.keys(triageMap).length+' leads reviewed.',
+                  (leads||[]).filter(l=>!triageMap[l.id]).length>0 && React.createElement('span',{style:{color:'#6b6760'}},
+                    ' · '+(leads||[]).filter(l=>!triageMap[l.id]).length+' added since this scan'),
                   triageTimestamp && React.createElement('span',{style:{color:'#6b6760'}}, ' • Last refreshed: '+
                     new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone(),timeZoneName:'short'})
                   )
@@ -5832,13 +6066,15 @@ function parseDelimitedText(text){
     const rows = data.slice(1).map(r => headers.map((_,i)=> String(r[i]==null?'':r[i]).trim()));
     return {headers, rows};
   }
-  // Minimal fallback (shouldn't normally run)
-  const lines = text.trim().split(/\r?\n/).filter(l=>l.trim());
-  if(lines.length<1) return {headers:[], rows:[]};
-  const sep = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(sep).map(h=>h.trim());
-  const rows = lines.slice(1).map(l => headers.map((_,i)=> (l.split(sep)[i]||'').trim()));
-  return {headers, rows};
+  // RFC 4180 fallback when PapaParse isn't available (quoted commas, doubled quotes).
+  if((text||'').includes('\t') && !(text||'').includes(',')){
+    const lines = text.trim().split(/\r?\n/).filter(l=>l.trim());
+    if(lines.length<1) return {headers:[], rows:[]};
+    const headers = lines[0].split('\t').map(h=>h.trim());
+    const rows = lines.slice(1).map(l => headers.map((_,i)=> (l.split('\t')[i]||'').trim()));
+    return {headers, rows};
+  }
+  return parseCsvText(text);
 }
 
 // Parse an .xlsx / .xls file (ArrayBuffer) into { headers, rows }.
@@ -6848,10 +7084,10 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
             const headers=['Name','Type','Stage','Phone','Email','Source','Last Contact','Notes','Tags'];
             const rows=leads.map(l=>[
               l.name,l.type,l.stage,l.phone,l.email,l.source,l.lastContact,
-              (l.notes||'').replace(/,/g,';'),
+              l.notes||'',
               (l.tags||[]).join('; ')
             ]);
-            const csv=[headers,...rows].map(r=>r.map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+            const csv=toCsv(headers, rows);
             const blob=new Blob([csv],{type:'text/csv'});
             const url=URL.createObjectURL(blob);
             const a=document.createElement('a');
@@ -10352,7 +10588,8 @@ function AIAssistantView({leads, transactions, communications, onGoToLead, dataR
         'Next step: '+(l.nextStep||'none'),
         'Tags: '+((l.tags||[]).join(', ')||'none'),
         toured>0?'Toured ('+toured+'): '+touredList:null,
-        appointments?'Appointments: '+appointments:null,
+        appointments?'Appointments (raw): '+appointments:null,
+        formatLeadScheduleForAI(l, transactions, today),
         (l.completedSteps||[]).length>0?'Completed steps: '+(l.completedSteps||[]).join(', '):null,
       ].filter(Boolean).join('\n    ');
     }).join('\n\n  ');
@@ -10410,6 +10647,7 @@ RULES:
 - You can suggest they go to a specific lead in the CRM if relevant
 - Use **bold** sparingly for emphasis only — no headers, no excessive formatting
 - Never use HTML tags
+- DATES: the CALENDAR FOR THIS LEAD block is the source of truth. Prefer it over notes, next step, or memory. Notes may contain stale relative phrases such as "in 3 days" that no longer match the stored appointment — ignore those when they conflict. If UPCOMING MEETINGS is none, say there is no upcoming meeting; never invent a date, time, or event (for example a "CMA meeting on November 12 at 2pm") that is not listed. Label close of escrow as close of escrow, not a lease, unless the transaction side is tenant or landlord.
 
 COMMUNICATIONS ARE YOUR SOURCE OF TRUTH:
 - Read the actual communications first — emails, calls, replies, timeline
@@ -10954,7 +11192,7 @@ function makeDemoLeads(agentId){
     {
       id:'demo-5-'+pfx,name:'The Williamson Estate (Demo)',type:'Seller',stage:'Listing Appointment',
       phone:'(555) 200-0005',email:'williamson.demo@example.com',source:'Sphere of Influence',
-      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA / listing presentation at their home in 3 days at 2pm.',
+      notes:'5br, 3.5ba Mediterranean home in Laguna Beach. Recently renovated. Owners relocating to Seattle. Expecting $2.2M+. CMA / listing presentation at their home on '+daysFrom(3)+' at 2pm.',
       nextStep:'Complete CMA analysis and prepare compelling listing presentation',lastContact:daysAgo(1),
       tags:['Listing Appointment','High Value','Luxury','Motivated'],activeProtocolId:'listing_appointment',protocolStep:0,
       protocolStartedAt:daysAgo(2),propertiesShared:[],interestedProperties:[],
@@ -11161,16 +11399,20 @@ function DateConfirmStack() {
     setCards(prev => {
       const card = prev.find(c => c.id === id);
       if(card && suppressMatches) {
-        // Record suppression so we don't ask about these same matches again.
-        try {
-          const raw = localStorage.getItem('agntai_date_dismissed') || '{}';
-          const dismissed = JSON.parse(raw);
-          suppressMatches.forEach(m => {
-            const k = card.leadId + '|' + m.dateISO + '|' + m.phrase.toLowerCase();
-            dismissed[k] = Date.now();
-          });
-          localStorage.setItem('agntai_date_dismissed', JSON.stringify(dismissed));
-        } catch(e) {}
+        // AG-080: persist per lead+date (and phrase) so derived calendar events stay gone.
+        suppressMatches.forEach(m => rememberDismissedLeadDate(card.leadId, m.dateISO, m.phrase));
+        // Existing scheduled_tasks column — marks the date dismissed without a new schema.
+        suppressMatches.forEach(m => {
+          dbAddScheduledTask(card.leadId, {
+            dueDate: m.dateISO,
+            type: 'Deadline',
+            label: 'Dismissed date',
+            status: 'dismissed',
+            source: 'agent_dismiss',
+            sourceRef: card.sourceLabel || 'toast',
+          }).catch(()=>{});
+        });
+        try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
       }
       return prev.filter(c => c.id !== id);
     });
@@ -12091,6 +12333,7 @@ function App(){
 
     await dbSaveLead(wl);
     setSaving(false);
+    try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
   };
   const del=async id=>{
     setLeads(prev=>prev.filter(l=>l.id!==id));
@@ -12124,7 +12367,7 @@ function App(){
       if (!leads?.length) return showToast('No leads to export','error');
       const headers=['Name','Email','Phone','Type','Stage','Source','Tags','Notes','Last Contact'];
       const rows=leads.map(l=>[l.name,l.email||'',l.phone||'',l.type,l.stage,l.source,(l.tags||[]).join('; '),l.notes||'',l.lastContact||'']);
-      const csvContent=[headers,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+      const csvContent=toCsv(headers, rows);
       const csv='﻿'+csvContent;
       const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
       const url=URL.createObjectURL(blob);
