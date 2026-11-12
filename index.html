@@ -977,7 +977,10 @@ async function dbLoadLead(leadId) {
   };
 }
 
-async function dbSaveLead(lead) {
+// AG-084: the agent's Next Step is only ever written by an explicit Next Step edit
+// (CRM cell, Add Lead, import, demo seed). Every other save path (AI scan tasks,
+// stage auto-advance, comm logging, stale copies of a lead) leaves next_step untouched.
+async function dbSaveLead(lead, opts={}) {
   const { data:{ user } } = await db.auth.getUser();
   const row = {
     id: lead.id, name: lead.name, phone: lead.phone, email: lead.email,
@@ -997,6 +1000,7 @@ async function dbSaveLead(lead) {
     is_demo: lead.isDemo||false,
     updated_at: new Date().toISOString(),
   };
+  if(!opts.withNextStep) delete row.next_step;
   const { error } = await db.from('leads').upsert(row);
   if (error) console.error('Save error:', error.message);
 }
@@ -1016,7 +1020,33 @@ async function dbSaveTransaction(tx) {
 async function dbLoadTransactions() {
   const { data:{ user } } = await db.auth.getUser();
   const { data, error } = await db.from('transactions').select('*').eq('agent_id', user.id).order('updated_at', { ascending: false });
-  return data || [];
+  return repairDemoTransactions(data || []);
+}
+
+// AG-083: accounts created before the AG-020 fix have the demo lease (3 Barranca Pkwy #210,
+// "Tenant · Active Lease") attached to The Williamson Estate (Demo), a seller. Calendar shows
+// that date as Close of Escrow, so Transactions and the AI called it a lease. Turn that one
+// demo record into the seller transaction it is shown as (same close date), and save it once.
+function _isMislinkedWilliamsonLease(tx){
+  return !!tx && /^demo-5-/.test(String(tx.lead_id||'')) && (tx.side==='tenant' || tx.side==='landlord' || tx.status==='active_lease');
+}
+function repairDemoTransactions(list){
+  return (list||[]).map(tx => {
+    if(!_isMislinkedWilliamsonLease(tx)) return tx;
+    const fixed = {
+      ...tx,
+      side:'seller',
+      status:'pre_listing',
+      property_type:'single_family',
+      financing: tx.financing==='cash' ? 'conventional' : (tx.financing||'conventional'),
+      purchase_price:'2200000',
+      property_address:'Laguna Beach, CA (demo)',
+      possession_date:null,
+      notes:'Demo listing: 5br, 3.5ba Mediterranean home in Laguna Beach. Owners relocating to Seattle, expecting $2.2M+. Target close of escrow is the date shown.',
+    };
+    try { if(typeof dbSaveTransaction==='function') dbSaveTransaction(fixed).catch(()=>{}); } catch(e) {}
+    return fixed;
+  });
 }
 
 // ── SCHEDULED TASK HELPERS ────────────────────────────────────────────────────
@@ -1214,12 +1244,14 @@ function buildCalendarItems(leads, transactions) {
   (transactions||[]).forEach(tx => {
     const lead = (leads||[]).find(l => l.id === tx.lead_id);
     if(!lead) return;
+    // AG-083: one label for the close date everywhere — a lease end only for tenant/landlord deals.
+    const _txIsLease = tx.side==='tenant' || tx.side==='landlord';
     const deadlines = [
       ['Deposit Due', tx.deposit_due_date],
       ['Inspection Removal', tx.inspection_removal_date],
       ['Appraisal Removal', tx.appraisal_removal_date],
       ['Loan Removal', tx.loan_removal_date],
-      ['Close of Escrow', tx.close_date],
+      [_txIsLease ? 'Lease Ends' : 'Close of Escrow', tx.close_date],
     ];
     deadlines.forEach(([label, date]) => {
       if(!date) return;
@@ -1328,6 +1360,25 @@ function _fmtTime(t) {
   return String(t.hh).padStart(2,'0')+':'+String(t.mm).padStart(2,'0');
 }
 
+// AG-086: resolve a weekday phrase to a date.
+//   "next Friday"  → the Friday of NEXT week (weeks run Mon–Sun). On Thu Nov 12 → Fri Nov 20.
+//   "this Friday"  → the coming Friday of this week (today if today is Friday).
+//   "Friday"/"on Friday" → the next upcoming Friday (a week out if today is Friday).
+function _weekdayDate(today, targetDow, qualifier) {
+  const todayDow = today.getDay();
+  const d = new Date(today);
+  const q = (qualifier||'').toLowerCase();
+  if(q === 'next') {
+    const toNextMonday = ((1 - todayDow + 7) % 7) || 7;
+    d.setDate(d.getDate() + toNextMonday + ((targetDow - 1 + 7) % 7));
+    return d;
+  }
+  let diff = (targetDow - todayDow + 7) % 7;
+  if(diff === 0 && q !== 'this') diff = 7; // "Tuesday" said on Tuesday usually means next Tuesday
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
 // Main API. Returns an array of detected future-date references.
 function extractDatesFromText(text, opts={}) {
   if(!text || typeof text !== 'string') return [];
@@ -1377,13 +1428,10 @@ function extractDatesFromText(text, opts={}) {
 
     // PATTERN 2: "Friday morning" / "Monday afternoon" → day + time band.
     // Checked BEFORE plain day-of-week so we capture the time band too.
-    m = lower.match(/\b(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(morning|afternoon|evening|night)\b/);
+    m = lower.match(/\b(?:(this|next)\s+)?(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(morning|afternoon|evening|night)\b/);
     if(m) {
-      const targetDow = _DAYS[m[1]];
-      const todayDow = today.getDay();
-      let diff = (targetDow - todayDow + 7) % 7;
-      if(diff === 0) diff = 7;
-      const d = new Date(today); d.setDate(d.getDate()+diff);
+      const d = _weekdayDate(today, _DAYS[m[2]], m[1]);
+      m = [m[0], m[2], m[3]];
       const bandTime = m[2] === 'morning' ? {hh:9, mm:0}
                     : m[2] === 'afternoon' ? {hh:14, mm:0}
                     : m[2] === 'evening' ? {hh:18, mm:0}
@@ -1395,12 +1443,8 @@ function extractDatesFromText(text, opts={}) {
     // PATTERN 3: "next Monday", "this Friday", "Tuesday"
     m = lower.match(/\b(this|next|on)?\s*(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
     if(m) {
-      const targetDow = _DAYS[m[2]];
-      const todayDow = today.getDay();
-      let diff = (targetDow - todayDow + 7) % 7;
-      if(diff === 0) diff = 7; // "Tuesday" said on Tuesday usually means next Tuesday
-      const d = new Date(today); d.setDate(d.getDate()+diff);
-      _push(d, m[0], sentence, 'high', detectedTime);
+      const d = _weekdayDate(today, _DAYS[m[2]], m[1]);
+      _push(d, m[0].trim(), sentence, 'high', detectedTime);
       continue;
     }
 
@@ -1529,6 +1573,11 @@ function parseCsvText(text){
   return {headers, rows: rows.slice(1).map(r => headers.map((_,i)=> String(r[i]==null?'':r[i]).trim()))};
 }
 
+// AG-081: a draft from the AI scan only carries the channel it picked (e.g. text only).
+function _aiDraftIncomplete(ai){
+  if(!ai) return true;
+  return !String(ai.text||'').trim() || !String(ai.email_body||'').trim() || !String(ai.call_script||'').trim();
+}
 // AG-081: parse AI Write JSON, including truncated / lightly malformed output.
 function parseAiWriteJson(raw){
   if(!raw) return null;
@@ -1572,7 +1621,7 @@ function parseAiWriteJson(raw){
 function isLeadDateDismissed(leadId, dateISO, lead){
   if(!leadId || !dateISO) return false;
   const date = String(dateISO).slice(0,10);
-  if(((lead && lead.scheduledTasks)||[]).some(t => String(t.dueDate||'').slice(0,10)===date && t.status==='dismissed')) return true;
+  if(((lead && lead.scheduledTasks)||[]).some(t => String(t.dueDate||'').slice(0,10)===date && t.status==='dismissed' && (t.source==='agent_dismiss' || t.label==='Dismissed date'))) return true;
   try {
     if(typeof localStorage === 'undefined') return false;
     const d = JSON.parse(localStorage.getItem('agntai_date_dismissed')||'{}')||{};
@@ -1656,6 +1705,22 @@ function formatLeadScheduleForAI(lead, transactions, todayStr){
     'If asked when the next meeting is and UPCOMING MEETINGS is none, say there is no upcoming meeting on the calendar. Do not invent one. Do not treat a past meeting, a deadline, or a relative phrase in notes ("in 3 days", "this week") as a future meeting if it conflicts with the calendar above.',
   ];
   return lines.join('\n');
+}
+
+// AG-079: one plain sentence about a lead's meetings vs today, for prompts the agent sees.
+function leadMeetingFactLine(lead, transactions, todayStr){
+  try {
+    const today = todayStr || localTodayStr(new Date());
+    const items = buildCalendarItems(lead?[lead]:[], (transactions||[]).filter(tx => tx && lead && tx.lead_id===lead.id));
+    const mtgs = items.filter(it => it.source==='appointment').sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const past = mtgs.filter(it => String(it.date).slice(0,10) < today);
+    const next = mtgs.find(it => String(it.date).slice(0,10) >= today);
+    const lastPast = past[past.length-1];
+    const parts = ['Today is '+formatMdY(today)+'.'];
+    if(next) parts.push('Next meeting on the calendar: '+(next.label||'Meeting')+' on '+formatMdY(next.date)+'.');
+    else parts.push('No upcoming meeting is on the calendar'+(lastPast ? ' (the last one, '+(lastPast.label||'a meeting')+', was on '+formatMdY(lastPast.date)+' and has passed).' : '.'));
+    return parts.join(' ');
+  } catch(e) { return ''; }
 }
 
 // AG-077: cached morning-scan summary is stale if today's calendar items changed since the scan.
@@ -2390,6 +2455,33 @@ async function runDailyTriage(leads, transactions, opts={}) {
 // Cost is tiny: ~1 call/day, Haiku, <500 tokens out. Even with caching off this
 // is roughly $0.001 per agent per day.
 // ──────────────────────────────────────────────────────────────────────────────
+// AG-077: one-line Today summary built from the live calendar + the task counters.
+function _plural(n, one, many){ return n+' '+(n===1?one:(many||one+'s')); }
+function buildTodaySummaryLine(leads, transactions, tasks, now){
+  const d = now || new Date();
+  const today = localTodayStr(d);
+  const t2 = new Date(d.getFullYear(), d.getMonth(), d.getDate()+1);
+  const tomorrow = localTodayStr(t2);
+  let items = [];
+  try { items = buildCalendarItems(leads||[], transactions||[]); } catch(e) {}
+  const on = (day) => items.filter(it => String(it.date||'').slice(0,10)===day && it.status!=='done' && it.status!=='dismissed');
+  const describe = (list) => {
+    const appts = list.filter(it=>it.source==='appointment').length;
+    const tks = list.filter(it=>it.source==='task').length;
+    const dls = list.filter(it=>it.source==='deadline').length;
+    const oh = list.filter(it=>it.source==='openhouse').length;
+    const parts = [];
+    if(appts) parts.push(_plural(appts,'appointment'));
+    if(tks) parts.push(_plural(tks,'scheduled task'));
+    if(dls) parts.push(_plural(dls,'deadline'));
+    if(oh) parts.push(_plural(oh,'open house','open houses'));
+    return parts.length ? parts.join(', ') : 'nothing scheduled';
+  };
+  const tl = tasks||[];
+  const c = (p) => tl.filter(t=>t.priority===p).length;
+  return 'Calendar today: '+describe(on(today))+' · tomorrow: '+describe(on(tomorrow))+
+    '. Task list: '+c('critical')+' critical, '+c('urgent')+' urgent, '+c('today')+' do today, '+c('followup')+' follow up.';
+}
 function _scanSummaryJudgesDay(t) {
   // Only whole-day workload verdicts; specific schedule facts ("only one showing at 2pm") stay.
   return /^\s*(a\s+)?(light|quiet|slow|easy|busy|heavy|packed)\s+(day|morning|afternoon)\b/i.test(String(t||''));
@@ -3445,7 +3537,7 @@ function buildLeadContext(lead, transaction, commHistory) {
       ['Inspection Removal', transaction.inspection_removal_date],
       ['Appraisal Removal', transaction.appraisal_removal_date],
       ['Loan Removal', transaction.loan_removal_date],
-      ['Close of Escrow', transaction.close_date],
+      [(transaction.side==='tenant'||transaction.side==='landlord') ? 'Lease Ends' : 'Close of Escrow', transaction.close_date],
     ].filter(([,d])=>d).map(([label,date])=>{
       const diff = Math.ceil((new Date(date)-new Date(today))/(1000*60*60*24));
       return label + ': ' + date + ' (' + (diff < 0 ? Math.abs(diff)+' days OVERDUE' : diff === 0 ? 'DUE TODAY' : 'in '+diff+' days') + ')';
@@ -3682,6 +3774,9 @@ FULL CLIENT HISTORY (read carefully — reference specific details, never use ge
 
 TRANSACTION (let this shape the urgency and specifics of every message):
 - ${ctx.txContext}
+
+DATES (AG-079 — source of truth; a meeting dated before today is PAST, never "coming up"):
+${formatLeadScheduleForAI(lead, transaction ? [transaction] : [], null)}
 
 ${ctx.prevAiGuide ? 'CURRENT TRANSACTION STEP: '+ctx.prevAiGuide+' — reference this naturally if relevant.' : ''}
 
@@ -4586,9 +4681,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         draftAi.text = decision.draftText;
       } else if(ch === 'email') {
         draftAi.email_subject = decision.subject || 'Following up';
-        draftAi.email_body = decision.email_body;
+        draftAi.email_body = decision.email_body || decision.draftText; // AG-081: triage puts the email draft in draftText
       } else if(ch === 'call') {
-        draftAi.call_script = decision.call_script;
+        draftAi.call_script = decision.call_script || decision.draftText;
       }
       updates[taskId] = draftAi;
     });
@@ -4619,6 +4714,21 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   },[communications, leads.length]);
 
   // ── TASK GENERATION ────────────────────────────────────────────────────────
+  // AG-085: card for a lead that changed (or was added) after today's AI scan.
+  const _sinceScanTask=(lead, why)=>({
+    id: lead.id + '-since-scan',
+    leadId: lead.id,
+    leadName: lead.name,
+    leadType: lead.type,
+    priority: 'today',
+    stage: lead.stage,
+    icon: '✨',
+    label: why==='stage' ? ('Now '+lead.stage+' — follow up') : 'New since the last scan — reach out',
+    action: why==='stage'
+      ? 'Stage changed since today\'s AI scan. Use ✨ AI Write for a fresh message, or Refresh scan to re-plan.'
+      : 'Added after today\'s AI scan. Use ✨ AI Write for a first message, or Refresh scan to re-plan.',
+    draftText: '',
+  });
   const allTasks=useMemo(()=>{
     const{protocolTasks}=genProtocolTasks(leads,commsMap,transactions);
     const protocolByLead = {};
@@ -4650,7 +4760,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // for the new stage instead of the stale AI card (until the next scan).
       if(decision && decision._stage && lead.stage && decision._stage !== lead.stage) {
         const t = protocolByLead[lead.id];
-        if(t) finalTasks.push(t);
+        // AG-085: never drop the card (and its AI Write) when no rule-based step is due.
+        finalTasks.push(t || _sinceScanTask(lead, 'stage'));
         handledLeadIds.add(lead.id);
         return;
       }
@@ -4677,11 +4788,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
           handledLeadIds.add(lead.id);
           return;
         }
-        // Triage finished but no decision returned — only then fall back
-        if(triageError) {
-          const t = protocolByLead[lead.id];
-          if(t) finalTasks.push(t);
-        }
+        // Triage finished but no decision for this lead (AI skipped it, or the lead was
+        // added after the scan). AG-085: show the rule-based task, or a simple card with
+        // AI Write, so the lead never silently disappears from Today until the next scan.
+        const t = protocolByLead[lead.id];
+        if(lead.stage !== 'Closed' && lead.stage !== 'Nurture') finalTasks.push(t || _sinceScanTask(lead, 'new'));
         handledLeadIds.add(lead.id);
         return;
       }
@@ -4970,11 +5081,15 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
     setDone(p=>[...p,t.leadId]);
   };
 
-  const runAI=async(t)=>{
+  // AG-081: opts.fill — the card already has a partial draft (e.g. the AI scan wrote only the
+  // text for an SMS task). Generate the missing channels and keep the existing draft, and stay
+  // on the channel the agent is looking at.
+  const runAI=async(t,opts={})=>{
     const lead=leads.find(l=>l.id===t.leadId);if(!lead)return;
+    const fill=!!opts.fill;
     setGenerating(t.id);setOpenCard(t.id);
     // Don't auto-expand a channel — let the user pick from the 3 previews
-    setActiveTab(p=>({...p,[t.id]:null}));
+    if(!fill) setActiveTab(p=>({...p,[t.id]:null}));
     const leadTx=(transactions||[]).find(tx=>tx.lead_id===lead.id)||null;
     // AG-053: always clear the spinner; time out after 60s; show an error message.
     setAiError(p=>{const n={...p};delete n[t.id];return n;});
@@ -4982,9 +5097,17 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),60000));
       const content=await Promise.race([generateAIContent(lead,t,leadTx),timeout]);
       if(content){
-        setAiContent(p=>({...p,[t.id]:content}));
+        if(fill){
+          setAiContent(p=>{
+            const prev=p[t.id]||{};
+            const out={...content};
+            ['text','email_subject','email_body','call_script'].forEach(k=>{ if((prev[k]||'').trim()) out[k]=prev[k]; });
+            return {...p,[t.id]:out};
+          });
+        } else setAiContent(p=>({...p,[t.id]:content}));
         // AG-081: never silently show Subject "Following up" with an empty body.
-        if(!(content.email_body||'').trim()){
+        const prevEmail=fill?((aiContent[t.id]||{}).email_body||''):'';
+        if(!(content.email_body||'').trim()&&!prevEmail.trim()){
           setAiError(p=>({...p,[t.id]:"The email draft came back empty. Click Retry to try again."}));
         }
       } else setAiError(p=>({...p,[t.id]:"Couldn't write this message right now. Please try again in a moment."}));
@@ -5176,7 +5299,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
         ),
         React.createElement('div',{className:'tc2-btns',style:{marginTop:10}},
           React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:600},
-            onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);}}},
+            onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);else if(!isOpen&&_aiDraftIncomplete(ai))runAI(t,{fill:true});}}},
             isGen?'✨ Writing your message...':'✨ AI Write'),
           onAskAI&&React.createElement('button',{className:'tb2',style:{background:'none',color:'#1a6b4a',border:'1px solid #1a6b4a',fontSize:11,fontWeight:600},
             onClick:e=>{
@@ -5184,7 +5307,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               const leadObj = lead || leads.find(l=>l.id===t.leadId);
               if(!leadObj) return;
               const prompt = 'Help me with this lead: '+leadObj.name+' ('+leadObj.type+', '+leadObj.stage+').\n\nAI needs input: '+(t.confirmQuestion||t.action||'')+'\n\nGive me quick coaching on what to do next.';
-              onAskAI(leadObj, prompt);
+              onAskAI(leadObj, prompt, {prefill:true}); // AG-087: open with context, don't auto-send
             }
           },'✨ Ask AI')
         ),
@@ -5307,7 +5430,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // PRIMARY ACTION ROW — AG-025: AI Write (inline draft) + Ask AI (assistant coaching) kept as distinct actions on one card
       React.createElement('div',{className:'tc2-btns'},
         React.createElement('button',{className:'tb2',style:{background:ai?'#7c3aed':'#1a6b4a',color:'white',opacity:isGen?0.7:1,fontWeight:600},
-          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);}}},
+          onClick:e=>{e.stopPropagation();if(!isGen){setOpenCard(isOpen?null:t.id);if(!ai||(!ai.email_body&&!ai.call_script&&!ai.text))runAI(t);else if(!isOpen&&_aiDraftIncomplete(ai))runAI(t,{fill:true});}}},
           isGen?'✨ Writing your message...':'✨ AI Write'),
         onAskAI&&React.createElement('button',{className:'tb2',style:{background:'none',color:'#1a6b4a',border:'1px solid #1a6b4a',fontSize:11,fontWeight:600},
           onClick:e=>{
@@ -5323,7 +5446,7 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             } else {
               prompt = 'Help me with this lead: '+leadObj.name+' ('+leadObj.type+', '+leadObj.stage+').\n\nNext action: '+(t.action||t.label||'')+'\n\nGive me a tailored message I can use right now, plus quick coaching on how to move this lead forward.';
             }
-            onAskAI(leadObj, prompt);
+            onAskAI(leadObj, prompt, {prefill:true}); // AG-087: open with context, don't auto-send
           }
         },'✨ Ask AI'),
         React.createElement('button',{className:'tb2',style:{background:quickLog==='call'?'#10b981':'none',color:quickLog==='call'?'white':'#6b6760',border:'1px solid '+(quickLog==='call'?'#10b981':'#e8e6e2'),fontSize:11},
@@ -5495,9 +5618,14 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             // EMAIL TAB
             tab==='email'&&React.createElement(React.Fragment,null,
               !ai&&!t.draftText&&React.createElement('div',{style:{textAlign:'center',padding:'20px 0',color:'#a09d98',fontSize:13}},'Click ✨ AI Write to generate a personalized email'),
+              // AG-081: no silent empty body — either "writing…" or a clear error with Retry.
               ai&&!(emailBody||'').trim()&&React.createElement('div',{style:{textAlign:'center',padding:'16px 0'}},
-                React.createElement('div',{style:{fontSize:13,color:'#b91c1c',marginBottom:8}},'The email draft came back empty.'),
-                React.createElement('button',{onClick:e=>{e.stopPropagation();runAI(t);},style:{fontSize:12,padding:'6px 14px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}},'Retry email')
+                isGen
+                  ? React.createElement('div',{style:{fontSize:13,color:'#7c3aed'}},'✨ Writing your email…')
+                  : React.createElement(React.Fragment,null,
+                      React.createElement('div',{style:{fontSize:13,color:'#b91c1c',marginBottom:8}},aiError[t.id]||'The email draft is empty.'),
+                      React.createElement('button',{onClick:e=>{e.stopPropagation();runAI(t,{fill:true});},style:{fontSize:12,padding:'6px 14px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}},'↻ Retry email')
+                    )
               ),
               (ai||t.draftText)&&!(!emailBody&&ai)&&React.createElement(React.Fragment,null,
                 React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}},
@@ -5520,7 +5648,12 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
             // CALL SCRIPT TAB
             tab==='call'&&React.createElement(React.Fragment,null,
               !ai&&React.createElement('div',{style:{textAlign:'center',padding:'20px 0',color:'#a09d98',fontSize:13}},'Click ✨ AI Write to generate your call script'),
-              ai&&React.createElement(React.Fragment,null,
+              ai&&!String(ai.call_script||'').trim()&&React.createElement('div',{style:{textAlign:'center',padding:'16px 0'}},
+                isGen
+                  ? React.createElement('div',{style:{fontSize:13,color:'#7c3aed'}},'✨ Writing your call script…')
+                  : React.createElement('button',{onClick:e=>{e.stopPropagation();runAI(t,{fill:true});},style:{fontSize:12,padding:'6px 14px',background:'#7c3aed',color:'white',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontWeight:600}},'↻ Write call script')
+              ),
+              ai&&String(ai.call_script||'').trim()&&React.createElement(React.Fragment,null,
                 React.createElement('div',{className:'scr-lbl',style:{color:'#7c3aed',marginBottom:8}},'✨ AI call script — use as a guide'),
                 React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
                   ...(ai?.call_script || '').split('\n').filter(l=>l.trim()).map((line,i)=>{
@@ -5580,6 +5713,12 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
   // ── RENDER ─────────────────────────────────────────────────────────────────
   const isLoading=!commsLoaded&&Object.keys(commsMap).length===0;
 
+  // AG-077: summary + stale signals derived from live data (never from a cached AI sentence).
+  const _addedSinceScan = (triageLoaded && !triageRunning && Object.keys(triageMap||{}).length>0)
+    ? (leads||[]).filter(l => !l.isDemo && !triageMap[l.id]).length : 0;
+  const _scanStale = !!(morningScan && morningScanIsStale(morningScan, leads, transactions));
+  const _todaySummaryLine = buildTodaySummaryLine(leads, transactions, allTasks);
+
   // Personalized, time-aware greeting
   const _hour = getUserHour();
   const _greeting = _hour < 12 ? 'Good morning' : _hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -5613,9 +5752,11 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       // AG-077: the scan only sees calendar items, so drop summaries that judge the whole day
       // (e.g. "Light day with one follow-up") — they contradict the Today task counters.
       // AG-077: hide workload-verdict summaries, and don't show a stale sentence once the calendar has changed.
-      !morningScanIsStale(morningScan, leads, transactions) && morningScan.summary && !_scanSummaryJudgesDay(morningScan.summary) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, morningScan.summary),
-      morningScanIsStale(morningScan, leads, transactions) && React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}},
-        'Schedule changed since '+(morningScan.timestamp ? new Date(morningScan.timestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : 'the last scan')+' — Refresh scan to update this summary.'
+      // AG-077 (round 2): the summary is no longer free AI text. It is built from the live
+      // calendar and the same task counters shown below, so it can't disagree with them.
+      React.createElement('div',{style:{fontSize:12,color:'#1e3a8a',marginBottom:4}}, _todaySummaryLine),
+      (_scanStale || _addedSinceScan>0) && React.createElement('div',{role:'status',style:{fontSize:12,color:'#92400e',background:'#fffbeb',border:'1px solid #fcd34d',borderRadius:6,padding:'6px 8px',margin:'4px 0'}},
+        '⚠ '+(_addedSinceScan>0 ? (_addedSinceScan+' lead'+(_addedSinceScan>1?'s':'')+' added') : 'Schedule changed')+' since the last scan'+(morningScan.timestamp ? ' ('+new Date(morningScan.timestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone()})+')' : '')+' — click Refresh scan to update today\'s plan.'
       ),
       // Render today's items. Prefer the AI-annotated `today` list; fall back to raw items for today.
       (() => {
@@ -5688,8 +5829,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
               ? React.createElement('div',{style:{color:'#065f46'}},
                   React.createElement('strong',null,'✨ AI set up your day.'),
                   ' ',Object.keys(triageMap).length+' leads reviewed.',
-                  (leads||[]).filter(l=>!triageMap[l.id]).length>0 && React.createElement('span',{style:{color:'#6b6760'}},
-                    ' · '+(leads||[]).filter(l=>!triageMap[l.id]).length+' added since this scan'),
+                  _addedSinceScan>0 && React.createElement('span',{style:{color:'#92400e',fontWeight:600}},
+                    ' · '+_addedSinceScan+' added since this scan — Refresh scan to include '+(_addedSinceScan>1?'them':'it')),
                   triageTimestamp && React.createElement('span',{style:{color:'#6b6760'}}, ' • Last refreshed: '+
                     new Date(triageTimestamp).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZone:getUserTimeZone(),timeZoneName:'short'})
                   )
@@ -7091,7 +7232,7 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
             const blob=new Blob([csv],{type:'text/csv'});
             const url=URL.createObjectURL(blob);
             const a=document.createElement('a');
-            a.href=url;a.download='my-leads-'+new Date().toISOString().slice(0,10)+'.csv';
+            a.href=url;a.download='my-leads-'+localTodayStr(new Date())+'.csv';
             a.click();URL.revokeObjectURL(url);
             setExportJustClicked(true);
             setTimeout(()=>setExportJustClicked(false),2000);
@@ -7191,8 +7332,8 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
               React.createElement('div',{className:'td',onClick:e=>e.stopPropagation()},
                 eNS===lead.id
                   ?React.createElement('div',{style:{display:'flex',gap:4}},
-                    React.createElement('input',{className:'ai',autoFocus:true,key:'nsi-'+lead.id,defaultValue:nsv,onBlur:e=>{const v=e.target.value.trim();if(v&&v!==lead.nextStep)onUpd({...lead,nextStep:v});setENS(null);},onKeyDown:e=>{if(e.key==='Enter'){onUpd({...lead,nextStep:e.target.value.trim()});setENS(null);}if(e.key==='Escape')setENS(null);},style:{flex:1,fontSize:12,padding:'3px 7px'}}),
-                    React.createElement('button',{className:'bs',style:{padding:'3px 7px',fontSize:11},onClick:()=>{onUpd({...lead,nextStep:nsv});setENS(null);}},'✓')
+                    React.createElement('input',{className:'ai',autoFocus:true,key:'nsi-'+lead.id,defaultValue:nsv,onBlur:e=>{const v=e.target.value.trim();if(v&&v!==lead.nextStep)onUpd({...lead,nextStep:v,_nextStepEdit:true});setENS(null);},onKeyDown:e=>{if(e.key==='Enter'){onUpd({...lead,nextStep:e.target.value.trim(),_nextStepEdit:true});setENS(null);}if(e.key==='Escape')setENS(null);},style:{flex:1,fontSize:12,padding:'3px 7px'}}),
+                    React.createElement('button',{className:'bs',style:{padding:'3px 7px',fontSize:11},onClick:()=>{onUpd({...lead,nextStep:nsv,_nextStepEdit:true});setENS(null);}},'✓')
                   )
                   :React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4}},
                     React.createElement('span',{className:'nst',style:{flex:1},onClick:()=>{setNsv(lead.nextStep);setENS(lead.id);}},lead.nextStep||'—'),
@@ -7204,8 +7345,13 @@ function LeadList({leads,transactions,onSel,onUpd,onAdd,onAddSphere,onDelete,onI
                         setGenNS(lead.id);
                         const leadTx=(transactions||[]).find(t=>t.lead_id===lead.id)||null;
                         const ns=await generateNextStep(lead,leadTx);
-                        if(ns){onUpd({...lead,nextStep:ns.replace(/^["']|["']$/g,'')});}
                         setGenNS(null);
+                        if(!ns) return;
+                        const suggestion=ns.replace(/^["']|["']$/g,'').trim();
+                        // AG-084: never silently replace a Next Step the agent typed — ask first.
+                        const cur=(lead.nextStep||'').trim();
+                        if(cur && cur!==suggestion && !window.confirm('Replace your Next Step?\n\nCurrent: '+cur+'\n\nAI suggestion: '+suggestion)) return;
+                        onUpd({...lead,nextStep:suggestion,_nextStepEdit:true});
                       }
                     },genNS===lead.id?'⏳':'✨')
                   )
@@ -7884,7 +8030,7 @@ function LeadDetail({lead,onBack,onUpd,onDelete,transactions,onTx,onStartTx,onAs
     ['Inspection Removal', leadTx.inspection_removal_date],
     ['Appraisal Removal', leadTx.appraisal_removal_date],
     ['Loan Removal', leadTx.loan_removal_date],
-    ['Close of Escrow', leadTx.close_date],
+    [(leadTx.side==='tenant'||leadTx.side==='landlord') ? 'Lease Ends' : 'Close of Escrow', leadTx.close_date],
   ].filter(([,d])=>d).map(([label,date])=>{
     const diff = Math.ceil((new Date(date)-new Date(today))/(1000*60*60*24));
     return {label,date,diff};
@@ -10601,7 +10747,7 @@ function AIAssistantView({leads, transactions, communications, onGoToLead, dataR
         ['Inspection Removal', tx.inspection_removal_date],
         ['Appraisal Removal', tx.appraisal_removal_date],
         ['Loan Removal', tx.loan_removal_date],
-        ['Close of Escrow', tx.close_date],
+        [(tx.side==='tenant'||tx.side==='landlord') ? 'Lease Ends' : 'Close of Escrow', tx.close_date],
       ].filter(([,d])=>d).map(([label,date])=>{
         const diff = Math.ceil((new Date(date)-new Date(today))/(1000*60*60*24));
         return label+': '+date+' ('+(diff<0?Math.abs(diff)+'d overdue':diff===0?'TODAY':'in '+diff+'d')+')';
@@ -10694,6 +10840,17 @@ This format is required so the app can extract just the message for sending. If 
     if(pending && pending.prompt){
       if(pending.leadId) setActiveLeadId(pending.leadId);
       window._PENDING_AI_PROMPT = null;
+      // AG-087: from a Today card, open the Assistant focused on the lead and PREFILL the
+      // suggested question without sending it — the agent can edit it or type their own.
+      if(pending.prefill){
+        const who = pending.leadName || 'this lead';
+        const intro = `Ready to help with ${who}. I have their notes, history and calendar.`+(pending.factLine ? '\n\n'+pending.factLine : '')+`\n\nI put a suggested question in the box below — edit it or type your own, then press Enter.`;
+        window._SEND_PENDING_AI = false;
+        setMessages([{role:'assistant', content:intro}]);
+        setInput(pending.prompt);
+        setTimeout(()=>{ try { const el=inputRef.current; if(el){ el.focus(); el.select(); } } catch(e){} }, 50);
+        return;
+      }
       const intro = `On it — pulling up ${pending.leadName||'that lead'} and thinking it through...`;
       window._SEND_PENDING_AI = true;
       setMessages([
@@ -11395,27 +11552,38 @@ function DateConfirmStack() {
     return () => window.removeEventListener('date-detected', handler);
   }, []);
 
-  const dismissCard = (id, suppressMatches=null) => {
-    setCards(prev => {
-      const card = prev.find(c => c.id === id);
-      if(card && suppressMatches) {
-        // AG-080: persist per lead+date (and phrase) so derived calendar events stay gone.
-        suppressMatches.forEach(m => rememberDismissedLeadDate(card.leadId, m.dateISO, m.phrase));
-        // Existing scheduled_tasks column — marks the date dismissed without a new schema.
-        suppressMatches.forEach(m => {
-          dbAddScheduledTask(card.leadId, {
-            dueDate: m.dateISO,
-            type: 'Deadline',
-            label: 'Dismissed date',
-            status: 'dismissed',
-            source: 'agent_dismiss',
-            sourceRef: card.sourceLabel || 'toast',
-          }).catch(()=>{});
-        });
-        try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
-      }
-      return prev.filter(c => c.id !== id);
-    });
+  // AG-080: "No, dismiss" must create nothing — including the Lease Ends event that the
+  // calendar derives from notes ("lease ends Feb 28, 2027"). Record the dismissal locally
+  // (instant) and on the lead (scheduled task with status 'dismissed', so it holds on other
+  // devices/origins), then refresh. Side effects run outside the state updater.
+  const cardsRef = React.useRef([]);
+  cardsRef.current = cards;
+  const dismissCard = async (id, suppressMatches=null) => {
+    const card = cardsRef.current.find(c => c.id === id);
+    setCards(prev => prev.filter(c => c.id !== id));
+    if(!card || !suppressMatches || !suppressMatches.length) return;
+    suppressMatches.forEach(m => rememberDismissedLeadDate(card.leadId, m.dateISO, m.phrase));
+    try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
+    // A brand-new lead may still be saving; retry briefly until the row exists.
+    for(let attempt=0; attempt<4; attempt++){
+      try {
+        const lead = await dbLoadLead(card.leadId);
+        if(lead){
+          const have = new Set((lead.scheduledTasks||[]).filter(t=>t.status==='dismissed').map(t=>String(t.dueDate||'').slice(0,10)));
+          const add = [];
+          suppressMatches.forEach(m => {
+            const d = String(m.dateISO).slice(0,10);
+            if(have.has(d)) return; have.add(d);
+            add.push({ id:_newTaskId(), dueDate:d, dueTime:null, type:'Deadline', label:'Dismissed date', draftText:'', channel:null,
+              status:'dismissed', source:'agent_dismiss', sourceRef:card.sourceLabel||'toast', createdAt:new Date().toISOString() });
+          });
+          if(add.length) await dbSaveLead({...lead, scheduledTasks:[...(lead.scheduledTasks||[]), ...add]});
+          break;
+        }
+      } catch(e) { console.warn('[AG-080] dismiss save failed', e); }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
   };
 
   const toggleMatch = (id, idx) => {
@@ -11715,8 +11883,12 @@ function OpenHouseView({user,db,leads,onAddLead}){
         React.createElement('div',{style:{fontSize:16,fontWeight:600,marginBottom:8}},'No open houses yet'),
         React.createElement('div',null,'Click "New Open House" to create your first open house and generate QR codes for visitors.')
       ):React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))',gap:20}},
-        openHouses.map(oh=>React.createElement('div',{key:oh.id,style:{background:'white',borderRadius:8,padding:20,border:'1px solid #e0dcd4',boxShadow:'0 1px 3px rgba(0,0,0,0.05)'}},
-          React.createElement('div',{style:{fontSize:16,fontWeight:600,marginBottom:8,color:'#1a1916'}},oh.address),
+        openHouses.map(oh=>{
+          // Past open houses (date before today, local time) get a muted "Past" style.
+          const _ohPast = String(oh.date||'').slice(0,10) < localTodayStr(new Date());
+          return React.createElement('div',{key:oh.id,className:_ohPast?'oh-past':'',style:{background:_ohPast?'#f6f5f2':'white',borderRadius:8,padding:20,border:'1px solid '+(_ohPast?'#e8e6e2':'#e0dcd4'),boxShadow:_ohPast?'none':'0 1px 3px rgba(0,0,0,0.05)',opacity:_ohPast?0.72:1}},
+          _ohPast&&React.createElement('div',{style:{display:'inline-block',fontSize:10,fontWeight:700,letterSpacing:'0.5px',textTransform:'uppercase',color:'#6b6760',background:'#e8e6e2',borderRadius:4,padding:'2px 6px',marginBottom:8}},'Past'),
+          React.createElement('div',{style:{fontSize:16,fontWeight:600,marginBottom:8,color:_ohPast?'#6b6760':'#1a1916'}},oh.address),
           React.createElement('div',{style:{fontSize:13,color:'#6b6760',marginBottom:12,lineHeight:1.6}},
             '📅 '+oh.date+(oh.time?' • '+oh.time:''),React.createElement('br'),
             oh.bedrooms?'🛏️ '+oh.bedrooms+' bed(s)':'',oh.bedrooms&&oh.bathrooms?' • ':'',
@@ -11732,7 +11904,7 @@ function OpenHouseView({user,db,leads,onAddLead}){
             React.createElement('button',{onClick:()=>{navigator.clipboard.writeText(generateQRUrl(oh));alert('Link copied!')},style:{flex:1,padding:'10px',background:'#f0f0f0',border:'1px solid #d5d0c8',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer'}},'🔗 Copy Link'),
             React.createElement('button',{onClick:()=>deleteOpenHouse(oh.id),style:{flex:1,padding:'10px',background:'#fef2f2',border:'1px solid #fecaca',borderRadius:6,fontSize:13,fontWeight:600,cursor:'pointer',color:'#991b1b'}},'🗑 Delete')
           )
-        ))
+        );})
       )
     )
   );
@@ -12201,7 +12373,7 @@ function App(){
       const demos=makeDemoLeads(user.id);
       setLeads(demos);
       setDbReady(true);
-      Promise.all(demos.map(d=>dbSaveLead(d)))
+      Promise.all(demos.map(d=>dbSaveLead(d,{withNextStep:true})))
         .then(()=>saveDemoTransaction(user.id))
         .catch(()=>{});
       // Demo leads have no communications
@@ -12220,7 +12392,7 @@ function App(){
         const demos=makeDemoLeads(user.id);
         setLeads(demos);
         setDbReady(true);
-        Promise.all(demos.map(d=>dbSaveLead(d)))
+        Promise.all(demos.map(d=>dbSaveLead(d,{withNextStep:true})))
           .then(()=>saveDemoTransaction(user.id))
           .then(()=>dbLoadTransactions().then(txData=>setTransactions(txData||[])))
           .catch(()=>{});
@@ -12246,7 +12418,9 @@ function App(){
       if(!user) return;
       dbLoadLeads().then(data=>{
         if(data && data.length) {
-          setLeads(data);
+          // AG-084: a Next Step save still in flight wins over the reloaded copy.
+          const pend=window._PENDING_NEXT_STEP||{};
+          setLeads(Object.keys(pend).length ? data.map(l=>pend[l.id]!==undefined?{...l,nextStep:pend[l.id]}:l) : data);
           // Also refresh communications for the updated leads
           dbLoadCommunicationsBatch(data.map(l=>l.id)).then(commMap=>{
             setCommunications(commMap||{});
@@ -12277,7 +12451,7 @@ function App(){
     setDbReady(true);
     setOnboardStep('welcome');
     // Save demos sequentially — leads first, then transaction
-    Promise.all(demos.map(d=>dbSaveLead(d)))
+    Promise.all(demos.map(d=>dbSaveLead(d,{withNextStep:true})))
       .then(()=>saveDemoTransaction(updatedUser.id))
       .catch(()=>{});
     db.auth.updateUser({data:{profile_complete:true}}).catch(()=>{});
@@ -12306,11 +12480,24 @@ function App(){
     }
   };
 
-  const upd=async u=>{
-    setLeads(prev=>prev.map(l=>l.id===u.id?u:l));
+  const upd=async u0=>{
+    // AG-084: only an explicit Next Step edit (flag _nextStepEdit) may change nextStep.
+    // Any other update keeps the Next Step the agent currently has.
+    const nsEdit=!!(u0&&u0._nextStepEdit);
+    const {_nextStepEdit, ...u}=u0||{};
+    let saved=u;
+    setLeads(prev=>prev.map(l=>{
+      if(l.id!==u.id) return l;
+      saved = nsEdit ? u : {...u, nextStep:l.nextStep};
+      return saved;
+    }));
+    if(nsEdit){ window._PENDING_NEXT_STEP={...(window._PENDING_NEXT_STEP||{}),[u.id]:u.nextStep}; }
     setSaving(true);
-    await dbSaveLead(u);
-    setSaving(false);
+    try { await dbSaveLead(u, {withNextStep:nsEdit}); }
+    finally {
+      if(nsEdit && window._PENDING_NEXT_STEP){ delete window._PENDING_NEXT_STEP[u.id]; }
+      setSaving(false);
+    }
   };
   const add=async l=>{
     // Default sphere contacts to category B when first added
@@ -12331,7 +12518,7 @@ function App(){
       gtag('event', 'first_real_lead_added', { lead_name: l.name });
     }
 
-    await dbSaveLead(wl);
+    await dbSaveLead(wl,{withNextStep:true});
     setSaving(false);
     try { window.dispatchEvent(new CustomEvent('leads-changed')); } catch(e) {}
   };
@@ -12535,7 +12722,7 @@ function App(){
                 React.createElement('button',{className:'demo-banner-cta',onClick:removeDemoLeads},'Remove demo leads')
               )
         ),
-        view==='today'?React.createElement(TodayView,{leads,transactions,communications,onSel:id=>{setSelId(id);setView('crm');},onTx:()=>setView('transactions'),onUpd:upd,onAskAI:(lead,prompt)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt};setView('assistant');}})
+        view==='today'?React.createElement(TodayView,{leads,transactions,communications,onSel:id=>{setSelId(id);setView('crm');},onTx:()=>setView('transactions'),onUpd:upd,onAskAI:(lead,prompt,opts)=>{window._PENDING_AI_PROMPT={leadId:lead.id,leadName:lead.name,prompt,prefill:!!(opts&&opts.prefill),factLine:leadMeetingFactLine(lead,transactions)};setView('assistant');}})
         :view==='calendar'?React.createElement(CalView,{
           leads,
           transactions,
