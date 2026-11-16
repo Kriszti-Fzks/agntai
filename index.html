@@ -1364,7 +1364,7 @@ function _fmtTime(t) {
 //   "next Friday"  → the Friday of NEXT week (weeks run Mon–Sun). On Thu Nov 12 → Fri Nov 20.
 //   "this Friday"  → the coming Friday of this week (today if today is Friday).
 //   "Friday"/"on Friday" → the next upcoming Friday (a week out if today is Friday).
-function _weekdayDate(today, targetDow, qualifier) {
+function _weekdayDate(today, targetDow, qualifier, sameDayIsToday) {
   const todayDow = today.getDay();
   const d = new Date(today);
   const q = (qualifier||'').toLowerCase();
@@ -1374,7 +1374,9 @@ function _weekdayDate(today, targetDow, qualifier) {
     return d;
   }
   let diff = (targetDow - todayDow + 7) % 7;
-  if(diff === 0 && q !== 'this') diff = 7; // "Tuesday" said on Tuesday usually means next Tuesday
+  // "Tuesday" said on Tuesday usually means next Tuesday — but a stored Next Step
+  // ("Call Pam Friday") read on Friday means TODAY (AG-089: sameDayIsToday).
+  if(diff === 0 && q !== 'this' && !sameDayIsToday) diff = 7;
   d.setDate(d.getDate() + diff);
   return d;
 }
@@ -1430,7 +1432,7 @@ function extractDatesFromText(text, opts={}) {
     // Checked BEFORE plain day-of-week so we capture the time band too.
     m = lower.match(/\b(?:(this|next)\s+)?(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+(morning|afternoon|evening|night)\b/);
     if(m) {
-      const d = _weekdayDate(today, _DAYS[m[2]], m[1]);
+      const d = _weekdayDate(today, _DAYS[m[2]], m[1], !!opts.sameDayIsToday);
       m = [m[0], m[2], m[3]];
       const bandTime = m[2] === 'morning' ? {hh:9, mm:0}
                     : m[2] === 'afternoon' ? {hh:14, mm:0}
@@ -1443,7 +1445,7 @@ function extractDatesFromText(text, opts={}) {
     // PATTERN 3: "next Monday", "this Friday", "Tuesday"
     m = lower.match(/\b(this|next|on)?\s*(sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
     if(m) {
-      const d = _weekdayDate(today, _DAYS[m[2]], m[1]);
+      const d = _weekdayDate(today, _DAYS[m[2]], m[1], !!opts.sameDayIsToday);
       _push(d, m[0].trim(), sentence, 'high', detectedTime);
       continue;
     }
@@ -1657,14 +1659,186 @@ function daysBetweenLocal(fromISO, toISO){
   const [ay,am,ad]=a.split('-').map(Number), [by,bm,bd]=b.split('-').map(Number);
   return Math.round((Date.UTC(by,bm-1,bd)-Date.UTC(ay,am-1,ad))/86400000);
 }
+// AG-090: absolute + correctly relative date labels for the AI.
+const _WEEKDAYS_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function fmtDowDate(iso){ // "Tue, Nov 17"
+  const s = String(iso||'').slice(0,10); const [y,m,d] = s.split('-').map(Number);
+  if(!y||!m||!d) return s;
+  const dt = new Date(y, m-1, d);
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()]+', '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]+' '+d;
+}
+// today / tomorrow / "this Tuesday" (the coming one, 2–6 days out) / "next Tuesday" (7–13 days out) / "in N days".
+function relativeDayLabel(iso, todayISO){
+  const t = todayISO || localTodayStr(new Date());
+  const diff = daysBetweenLocal(t, iso);
+  const s = String(iso).slice(0,10); const [y,m,d] = s.split('-').map(Number);
+  const wd = _WEEKDAYS_LONG[new Date(y, m-1, d).getDay()];
+  if(diff===0) return 'TODAY';
+  if(diff===1) return 'tomorrow';
+  if(diff===-1) return 'yesterday';
+  if(diff<0) return Math.abs(diff)+' days ago';
+  if(diff<=6) return 'this '+wd+', in '+diff+' days';
+  if(diff<=13) return 'next '+wd+', in '+diff+' days';
+  return 'in '+diff+' days';
+}
+// AG-090: resolve every date phrase in a lead's Next Step + notes to an absolute date.
+function resolvedLeadDateLines(lead, todayDate){
+  const today = todayDate ? new Date(todayDate) : new Date(); today.setHours(0,0,0,0);
+  const tISO = localTodayStr(today);
+  const out = [];
+  const add = (src, text, sameDay) => {
+    try {
+      extractDatesFromText(text||'', {today, sameDayIsToday: sameDay}).forEach(r => {
+        out.push(`"${r.phrase}" in ${src} = ${fmtDowDate(r.dateISO)} (${relativeDayLabel(r.dateISO, tISO)})`);
+      });
+    } catch(e) {}
+  };
+  add('Next step', lead && lead.nextStep, true);
+  add('notes', lead && lead.notes, false);
+  return out;
+}
+function resolvedDatesBlock(lead, todayDate){
+  const today = todayDate ? new Date(todayDate) : new Date();
+  const tISO = localTodayStr(today);
+  const lines = resolvedLeadDateLines(lead, today);
+  return `TODAY IS ${fmtDowDate(tISO)}, ${tISO.slice(0,4)}.`+(lines.length ? `\nDATES IN NOTES/NEXT STEP, RESOLVED (use these, not the relative words): `+lines.join('; ') : '');
+}
+const AI_DATE_WORDING_RULES = `DATE WORDING RULES (AG-090):
+- Relative words in notes ("Friday", "next Tuesday", "this weekend") were written on an earlier day. Never copy them as-is. Use the RESOLVED date given (e.g. "Tue, Nov 17") or a relative word that is correct for TODAY.
+- "this <weekday>" = the coming one within the next 6 days; "next <weekday>" = 7–13 days out. A date 4 days away is "this Tuesday", never "next Tuesday". When in doubt, write the weekday with the date ("Tuesday, Nov 17").
+- If a Next Step or task is marked TODAY, say it is today (e.g. "call today to schedule the listing consult"), not a future week.`;
+
+// AG-089: is this lead's Next Step / follow-up due today? Returns a short reason or null.
+function leadDueTodayReason(lead, todayDate){
+  if(!lead) return null;
+  const today = todayDate ? new Date(todayDate) : new Date(); today.setHours(0,0,0,0);
+  const tISO = localTodayStr(today);
+  const st = (lead.scheduledTasks||[]).find(t => t && String(t.dueDate||'').slice(0,10)===tISO && !['done','dismissed','cancelled','completed'].includes(String(t.status||'').toLowerCase()));
+  if(st) return 'Scheduled for today: '+(st.label||st.type||'follow-up');
+  if(lead.followUpDate && String(lead.followUpDate).slice(0,10)===tISO) return 'Follow-up date is today';
+  const ns = (lead.nextStep||'').trim();
+  if(ns){
+    if(/\btoday\b/i.test(ns) && lead.nextStepUpdatedAt && localTodayStr(new Date(lead.nextStepUpdatedAt))===tISO) return 'Next Step is due today';
+    try {
+      if(extractDatesFromText(ns, {today, sameDayIsToday:true}).some(r => r.dateISO===tISO)) return 'Next Step is due today';
+    } catch(e) {}
+  }
+  return null;
+}
+
+// AG-091: referral detection + the referrer's name only when the data gives one.
+function leadReferralInfo(lead){
+  if(!lead) return {isReferral:false, referrer:null, relation:null};
+  const notes = String(lead.notes||'');
+  const isReferral = String(lead.source||'').toLowerCase()==='referral' || /\brefer(red|ral)\b/i.test(notes);
+  if(!isReferral) return {isReferral:false, referrer:null, relation:null};
+  let referrer = null;
+  const m = notes.match(/\b(?:[Rr]eferred by|[Rr]eferral from|[Rr]eferred from|[Rr]eferrer:?|REFERRED BY)\s+([A-Z][a-zA-Z'’.-]+(?:\s+(?:&|and)\s+[A-Z][a-zA-Z'’.-]+)?(?:\s+[A-Z][a-zA-Z'’.-]+){0,2})/);
+  const STOP = /^(A|An|The|My|Our|Her|His|Their|Past|Previous|Former|Old|Client|Clients|Friend|Neighbor|Coworker|Family|Zillow|Realtor|Redfin|Google|Facebook|Instagram|Website)$/;
+  if(m && !STOP.test(m[1].split(/\s+/)[0])) referrer = m[1].trim();
+  let relation = null;
+  const r = notes.match(/\breferred by (?:a |an |my |our )?((?:past|former|previous|current|old) clients?|(?:a )?(?:friend|neighbou?r|coworker|co-worker|family member|relative|colleague|lender|agent)s?)\b/i);
+  if(r) relation = r[1].toLowerCase();
+  return {isReferral, referrer, relation};
+}
+function referralPromptLine(lead){
+  const r = leadReferralInfo(lead);
+  if(!r.isReferral) return 'LEAD SOURCE: '+(lead && lead.source ? lead.source : 'unknown')+'.';
+  return 'LEAD SOURCE: REFERRAL — '+(r.referrer ? 'referred by '+r.referrer+' (you may mention '+r.referrer+' by name).' : 'referrer not named'+(r.relation ? ' (notes say: '+r.relation+')' : '')+'. Do NOT invent a referrer name.')+
+    ' Use referral wording (e.g. "'+(r.referrer ? r.referrer+' mentioned you' : (r.relation ? 'a '+r.relation.replace(/s$/,'')+' of mine passed along your name' : 'I was given your name'))+'…"). Never write inbound wording like "glad you reached out", "thanks for reaching out", "thanks for your inquiry" — they did not contact the agent first.';
+}
+const _INBOUND_PHRASE_RE = /\b(glad you reached out|thanks? (?:you )?for reaching out|thanks? (?:you )?for (?:your )?(?:inquiry|getting in touch|contacting me)|(?:great|nice) to hear from you)\b/i;
+
+// AG-088: place-name guard. Cities the AI might swap for a similar-sounding one.
+const _PLACE_GAZ = ['Tustin','Tucson','Irvine','Irving','Anaheim','Santa Ana','Orange','Costa Mesa','Newport Beach','Newport Coast','Huntington Beach','Fountain Valley','Garden Grove','Westminster','Seal Beach','Los Alamitos','Cypress','Buena Park','Fullerton','Placentia','Yorba Linda','Brea','La Habra','Villa Park','Lake Forest','Mission Viejo','Laguna Niguel','Laguna Hills','Laguna Beach','Laguna Woods','Aliso Viejo','Dana Point','San Clemente','San Juan Capistrano','Rancho Santa Margarita','Ladera Ranch','Foothill Ranch','Coto de Caza','Stanton','La Palma','Long Beach','Lakewood','Cerritos','Whittier','Downey','Norwalk','Pasadena','Glendale','Burbank','Torrance','Redondo Beach','Manhattan Beach','Hermosa Beach','Santa Monica','Malibu','Los Angeles','Riverside','Corona','Ontario','Chino','Chino Hills','Rancho Cucamonga','Fontana','San Bernardino','Temecula','Murrieta','Menifee','Eastvale','Norco','Upland','Claremont','Pomona','Diamond Bar','Walnut','West Covina','Carlsbad','Oceanside','Encinitas','Escondido','Vista','San Marcos','Del Mar','La Jolla','Chula Vista','San Diego','Santa Clarita','Valencia','Simi Valley','Thousand Oaks','Ventura','Oxnard','Camarillo','San Jose','San Francisco','Oakland','Fremont','Sacramento','Fresno','Bakersfield','Palm Springs','Palm Desert','Phoenix','Scottsdale','Tempe','Mesa','Chandler','Gilbert','Austin','Houston','Dallas','Boston','Denver','Seattle','Portland','Las Vegas','Henderson','Reno','Salt Lake City','Boise','Albuquerque','Atlanta','Miami','Orlando','Tampa','Nashville','Charlotte','Raleigh','Chicago','New York','Brooklyn','Newport','Austin'];
+function _placeRe(name){ return new RegExp('\\b'+name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+')+'\\b','g'); }
+function _placesInText(text){
+  const t = String(text||''); const found = [];
+  // longest names first so "Newport Beach" wins over "Newport", "Chino Hills" over "Chino"
+  const names = Array.from(new Set(_PLACE_GAZ)).sort((a,b)=>b.length-a.length);
+  let masked = t;
+  names.forEach(n => { const re=_placeRe(n); if(re.test(masked)){ found.push(n); masked = masked.replace(_placeRe(n), ' '.repeat(n.length)); } });
+  return found;
+}
+// Every place name present in this lead's own data (notes, next step, addresses, "Area: X").
+function leadPlaceNames(lead, transactions){
+  const bits = [];
+  if(lead){
+    bits.push(lead.notes, lead.nextStep, lead.address, lead.area, lead.city, (lead.tags||[]).join(' '));
+    ['touredProperties','toured','sharedProperties','propertiesShared','interestedProperties','appointments','scheduledTasks'].forEach(k => {
+      try { (lead[k]||[]).forEach(x => bits.push(typeof x==='string' ? x : JSON.stringify(x))); } catch(e) {}
+    });
+  }
+  (transactions||[]).forEach(tx => { if(tx && lead && tx.lead_id===lead.id) bits.push(tx.property_address, tx.address, tx.city); });
+  try { const a = window._AGENT||{}; bits.push(a.brokerage, a.city, a.market, a.signature, a.serviceArea); } catch(e) {}
+  const blob = bits.filter(Boolean).join(' \n ');
+  const set = new Set(_placesInText(blob));
+  // Free-form "Area: X" / "City: X" / "Location: X" values count too, even if not in the list.
+  const re = /\b(?:area|city|location|neighbou?rhood|town)s?\s*[:=-]\s*([A-Z][A-Za-z .'-]{1,40}?)(?=[,.;\n]|$| and | or )/gi;
+  let m; while((m = re.exec(blob))) set.add(m[1].trim());
+  return Array.from(set);
+}
+function _bigramDice(a,b){
+  a=a.toLowerCase().replace(/\s+/g,''); b=b.toLowerCase().replace(/\s+/g,'');
+  if(a===b) return 1; if(a.length<2||b.length<2) return 0;
+  const bg = s => { const m=new Map(); for(let i=0;i<s.length-1;i++){const k=s.slice(i,i+2); m.set(k,(m.get(k)||0)+1);} return m; };
+  const A=bg(a), B=bg(b); let inter=0; A.forEach((v,k)=>{ inter+=Math.min(v,B.get(k)||0); });
+  return 2*inter/((a.length-1)+(b.length-1));
+}
+function _placesLookAlike(a,b){
+  const x=a.toLowerCase(), y=b.toLowerCase();
+  if(x===y) return false;
+  if(x.slice(0,2)===y.slice(0,2) && Math.abs(x.length-y.length)<=2) return true;
+  return _bigramDice(x,y) >= 0.5;
+}
+// Replace a place the AI wrote that isn't in the lead's data with the lead's look-alike place;
+// otherwise flag it. Returns {text, replaced:[[from,to]], flagged:[name]}.
+function checkPlaceNames(text, allowedPlaces){
+  const res = {text: text, replaced: [], flagged: []};
+  if(typeof text!=='string' || !text) return res;
+  const allowed = (allowedPlaces||[]).filter(Boolean);
+  const allowedLower = allowed.map(a=>a.toLowerCase());
+  _placesInText(text).forEach(name => {
+    const nl = name.toLowerCase();
+    if(allowedLower.some(a => a===nl || a.includes(nl) || nl.includes(a))) return;
+    const cands = allowed.filter(a => _placesLookAlike(name, a));
+    if(cands.length===1){
+      res.text = res.text.replace(_placeRe(name), cands[0]);
+      res.replaced.push([name, cands[0]]);
+    } else if(allowed.length) {
+      res.flagged.push(name);
+    }
+  });
+  return res;
+}
+// Apply the guard to every text field of an AI Write / triage result (mutates + returns obj).
+function applyPlaceGuard(obj, lead, transactions, fields){
+  if(!obj || !lead) return obj;
+  const allowed = leadPlaceNames(lead, transactions);
+  const warn = new Set(obj._placeWarnings||[]);
+  (fields||['text','email_subject','email_body','call_script']).forEach(k => {
+    if(typeof obj[k] !== 'string') return;
+    const r = checkPlaceNames(obj[k], allowed);
+    if(r.replaced.length) { obj[k] = r.text; r.replaced.forEach(([a,b]) => console.warn('[AG-088] place name fixed:', a, '→', b)); }
+    r.flagged.forEach(n => warn.add(n));
+  });
+  const ref = leadReferralInfo(lead);
+  if(ref.isReferral){
+    (fields||['text','email_subject','email_body','call_script']).forEach(k => {
+      if(typeof obj[k]==='string' && _INBOUND_PHRASE_RE.test(obj[k])) obj._inboundWarning = true;
+    });
+  }
+  obj._placeWarnings = Array.from(warn);
+  return obj;
+}
+
 function classifyLeadSchedule(lead, transactions, todayStr){
   const today = todayStr || localTodayStr(new Date());
   const txs = (transactions||[]).filter(tx => tx && lead && tx.lead_id === lead.id);
   const items = (typeof buildCalendarItems === 'function') ? buildCalendarItems(lead?[lead]:[], txs) : [];
   const labelOf = (it) => {
-    const when = formatMdY(it.date) + (it.time ? ' at '+it.time : '');
-    const diff = daysBetweenLocal(today, it.date);
-    const rel = diff===0 ? 'today' : diff===1 ? 'tomorrow' : diff===-1 ? 'yesterday' : diff>0 ? ('in '+diff+' days') : (Math.abs(diff)+' days ago');
+    const when = fmtDowDate(it.date) + ', ' + String(it.date).slice(0,4) + (it.time ? ' at '+it.time : '');
+    const rel = relativeDayLabel(it.date, today); // AG-090: this Tuesday, in 4 days
     const kind = it.source==='appointment' ? 'meeting' : it.source==='task' ? 'task' : (it.isLease ? 'lease end' : (it.source==='deadline' ? 'deadline' : it.source||'event'));
     return (it.label || it.type || 'Event')+' on '+when+' ('+rel+', '+kind+')'+(it.notes && it.notes!==it.label ? ' — '+String(it.notes).slice(0,80) : '');
   };
@@ -2118,6 +2292,9 @@ function _triageHash(lead, comms, transactions) {
     latestComm ? (latestComm.id||'') : '',
     latestComm ? (latestComm.status||'') : '',
     tx ? [tx.status, tx.deposit_due_date, tx.inspection_removal_date, tx.appraisal_removal_date, tx.loan_removal_date, tx.close_date].join('|') : '',
+    // AG-089/090: re-decide when a relative date in the Next Step/notes now resolves differently (e.g. "Friday" became today)
+    (() => { try { const t=new Date(); return [lead.nextStep, lead.notes].map((x,i)=>extractDatesFromText(x||'',{today:t, sameDayIsToday:i===0}).map(r=>r.dateISO).join(',')).join('/') + (leadDueTodayReason(lead, t) ? '|DUE' : ''); } catch(e) { return ''; } })(),
+    lead.source||'',
   ];
   // Lightweight string hash (FNV-1a). Not crypto — just stable + compact.
   let h = 2166136261;
@@ -2186,11 +2363,19 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
   const notes = (lead.notes||'').trim();
   const trimmedNotes = notes.length > 240 ? notes.slice(0, 237)+'...' : notes;
 
+  // AG-089/090: resolved absolute dates for every date phrase; flag a Next Step due today.
+  const _resolved = resolvedLeadDateLines(lead, today);
+  const _dueWhy = leadDueTodayReason(lead, today);
+  const _sched = (() => { try { const c = classifyLeadSchedule(lead, transactions, localTodayStr(today)); return [...c.upcomingMeetings, ...c.upcomingOther].slice(0,4); } catch(e) { return []; } })();
   return [
     `─── LEAD [id:${lead.id}] ${lead.name} ───`,
     `${lead.type} | Stage: ${lead.stage} | Last contact: ${lastContactStr}`,
+    referralPromptLine(lead),
     trimmedNotes ? `Notes: ${trimmedNotes}` : null,
     (lead.nextStep||'').trim() ? `Next step (agent set): ${lead.nextStep.trim()}` : null,
+    _resolved.length ? `Dates resolved (today is ${fmtDowDate(localTodayStr(today))}): ${_resolved.join('; ')}` : null,
+    _sched.length ? `Upcoming on calendar: ${_sched.join('; ')}` : null,
+    _dueWhy ? `DUE TODAY: ${_dueWhy} — decision must be "action" for today.` : null,
     txLine || null,
     `Comms (most recent ${c.length}):`,
     commLines.length ? commLines.join('\n') : '  (none)',
@@ -2202,6 +2387,7 @@ function _triageBuildLeadCard(lead, comms, transactions, today) {
 function _triageSystemPrompt(agentName, today) {
   const todayStr = today.toDateString();
   return `You are a senior real estate coach helping ${agentName||'an agent'} decide what to do TODAY for each of their leads. Today is ${todayStr}.
+Today's date is ${fmtDowDate(localTodayStr(today))}, ${today.getFullYear()}.
 Date rule (AG-078): never compute or state how many days one date is before/after another (e.g. "two days before last contact") — state each date plainly; a later calendar date is AFTER an earlier one.
 
 For each lead, you read their full picture (stage, notes, communication history, transaction status) and decide one of three things:
@@ -2224,8 +2410,10 @@ ACTION when:
   • Lead's note explicitly says "do X today" or similar.
   • Past outbound was marked "No Answer" and 2+ days have passed — follow-up with new angle.
 
+  • The lead card says "DUE TODAY" (the agent's Next Step or a scheduled follow-up is today) — ALWAYS action, never skip (AG-089).
+
 SKIP when:
-  • Notes or timeline say "call Tuesday at 4pm" and today is not Tuesday — wait.
+  • Notes or timeline say "call Tuesday at 4pm" and today is not Tuesday — wait. Check the "Dates resolved" line: if it says a weekday is TODAY, it is today.
   • Agent very recently sent something (< 2 days) and it's normal to wait.
   • Lead is Nurture or Closed unless a real trigger applies.
   • There's an upcoming appointment that's already scheduled.
@@ -2270,6 +2458,10 @@ OUTPUT FORMAT: respond with a JSON array of objects, one per lead, in the same o
 Return ONLY the JSON array. No prose, no markdown, no \`\`\`json fences.
 
 ${AI_FACT_RULES}
+
+${AI_DATE_WORDING_RULES}
+
+${AI_REFERRAL_RULES}
 
 ${AI_SIGNATURE_RULES()}
 
@@ -2421,6 +2613,8 @@ async function runDailyTriage(leads, transactions, opts={}) {
   batchResults.flat().forEach(decision => {
     if(!decision || !decision.leadId) return;
     const lead = leadsToTriage.find(l => l.id === decision.leadId);
+    // AG-088/091: fix look-alike place names in the stored decision itself
+    if(lead) { try { applyPlaceGuard(decision, lead, transactions, ['draftText','subject','task','reason','followUpDraft','email_body','call_script']); } catch(e) {} }
     if(lead) {
       byLeadId[decision.leadId] = {...decision, _hash: lead._triageHash, _decidedAt: decidedAt, _stage: lead.stage||''};
     } else {
@@ -3727,9 +3921,13 @@ const AI_FACT_RULES = `FACT RULES (critical — breaking these is worse than bei
 - If a fact you would need is missing or conflicting (e.g. two different prices or addresses), do not pick one — leave it out of the client message and mention the gap in your coaching instead.
 - If a "Last contact" date is given, the agent HAS been in contact with this client. Never say "no prior contact", "first contact" or "never contacted" in that case — say the details of that contact aren't logged instead.
 - Greet the client by the name given as the first name / greeting name. Never greet with an article like "The" — for an estate, trust or company use the full name given.
+- PLACE NAMES (AG-088): copy every city, neighborhood and street name EXACTLY as written in the data. Never swap it for a similar-sounding place (e.g. Tustin is NOT Tucson, Irvine is NOT Irving). If no place is given, don't name one.
 - Do not invent prices, dates, addresses, names, lenders or outcomes. Prefer a neutral phrasing like "coming up on Nov 4" over a guessed status.
 - NEVER leave a bracketed instruction or placeholder in the output (e.g. "[reflect back their criteria]", "[address]"). Fill it from the data (criteria, budget, area, homes toured/shared by address) or rewrite the sentence without it (AG-056).
 - Write plain, natural sentences. No redundant phrasing like "confirm your deposit is confirmed". If a deadline is overdue, say so clearly and ask for the specific thing needed (e.g. "Your deposit was due on <that date> — can you send the receipt today?", using the real date from the data) (AG-059).`;
+const AI_REFERRAL_RULES = `REFERRAL RULES (AG-091):
+- If the LEAD SOURCE line says REFERRAL, the client did NOT contact the agent first. Open with the referral (e.g. "<referrer> passed along your name" or, with no name, "a past client of mine mentioned you"). Never write "glad you reached out", "thanks for reaching out" or "thanks for your inquiry".
+- Mention the referrer by name ONLY if a name is given in the data. Never invent or guess a referrer's name.`;
 const AI_PRIVACY_RULES = `PRIVACY RULES (critical):
 - This request is about ONE client only. Never mention, compare to, or reveal details about any other client, lead, transaction or file.`;
 
@@ -3749,10 +3947,16 @@ ${AI_SIGNATURE_RULES()}
 
 ${AI_FACT_RULES}
 
+${AI_DATE_WORDING_RULES}
+
+${AI_REFERRAL_RULES}
+
 ${AI_PRIVACY_RULES}
 
 LEAD:
 - Name: ${ctx.name} (use first name: ${ctx.firstName})
+- ${referralPromptLine(lead)}
+- Places named in this lead's data (copy exactly): ${leadPlaceNames(lead, transaction ? [transaction] : []).join(', ') || 'none'}
 - Type: ${ctx.type}
 - Stage: ${ctx.stage}
 - Last contact: ${ctx.dsLabel}
@@ -3777,6 +3981,7 @@ TRANSACTION (let this shape the urgency and specifics of every message):
 
 DATES (AG-079 — source of truth; a meeting dated before today is PAST, never "coming up"):
 ${formatLeadScheduleForAI(lead, transaction ? [transaction] : [], null)}
+${resolvedDatesBlock(lead)}${leadDueTodayReason(lead) ? '\nDUE TODAY: '+leadDueTodayReason(lead)+' — say "today", not a later week.' : ''}
 
 ${ctx.prevAiGuide ? 'CURRENT TRANSACTION STEP: '+ctx.prevAiGuide+' — reference this naturally if relevant.' : ''}
 
@@ -3825,6 +4030,7 @@ ${AI_FACT_RULES}`;
     } catch(e) { console.warn('[AI Write] email retry failed', e); }
   }
   if(!(content.text||'').trim() && !(content.email_body||'').trim() && !(content.call_script||'').trim()) return null;
+  applyPlaceGuard(content, lead, transaction ? [transaction] : []); // AG-088/091 post-check
   return content;
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4278,7 +4484,7 @@ function _addLeadFollowUp(f){
   return {fields, scheduledTasks};
 }
 function AddModal({onClose,onAdd}){
-  const [f,setF]=useState({name:'',phone:'',email:'',source:'Referral',type:'Buyer',stage:'New',notes:'',nextStep:'',followUpDate:''});
+  const [f,setF]=useState({name:'',phone:'',email:'',source:'',type:'Buyer',stage:'New',notes:'',nextStep:'',followUpDate:''}); // AG-092: Source starts empty every time the form opens (was always 'Referral')
   const [tags,setTags]=useState([]);
   const set=(k,v)=>{if(k==='type')setF(x=>({...x,type:v,stage:STAGE_MAP[v][0]}));else setF(x=>({...x,[k]:v}));};
   const sub=()=>{
@@ -4315,7 +4521,7 @@ function AddModal({onClose,onAdd}){
           React.createElement('div',{className:'fg'},React.createElement('label',{className:'fl'},'Type'),React.createElement('select',{className:'fse',value:f.type,onChange:e=>set('type',e.target.value)},...Object.keys(STAGE_MAP).map(t=>React.createElement('option',{key:t},t)))),
           React.createElement('div',{className:'fg'},React.createElement('label',{className:'fl'},'Stage'),React.createElement('select',{className:'fse',value:f.stage,onChange:e=>set('stage',e.target.value)},...STAGE_MAP[f.type].map(s=>React.createElement('option',{key:s},s))))
         ),
-        React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Source'),React.createElement('select',{className:'fse',value:f.source,onChange:e=>set('source',e.target.value)},...['Lead Magnet','Social','Lead Gen','Open House','SOI','Referral','Website','Other'].map(s=>React.createElement('option',{key:s},s)))),
+        React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Source'),React.createElement('select',{className:'fse',value:f.source,onChange:e=>set('source',e.target.value)},React.createElement('option',{key:'',value:''},'Select source…'),...['Lead Magnet','Social','Lead Gen','Open House','SOI','Referral','Website','Other'].map(s=>React.createElement('option',{key:s},s)))),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Next Step'),React.createElement('input',{className:'fi',placeholder:'e.g. Call tomorrow',value:f.nextStep,onChange:e=>set('nextStep',e.target.value)})),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Follow-up date'),React.createElement('input',{className:'fi',type:'date',value:f.followUpDate,onChange:e=>set('followUpDate',e.target.value)})),
         React.createElement('div',{className:'fg fw'},React.createElement('label',{className:'fl'},'Notes'),React.createElement('textarea',{className:'fi',placeholder:'Budget, timeline, motivation...',value:f.notes,onChange:e=>set('notes',e.target.value),rows:3})),
@@ -4685,6 +4891,9 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       } else if(ch === 'call') {
         draftAi.call_script = decision.call_script || decision.draftText;
       }
+      // AG-088/091: same place-name / referral post-check as AI Write
+      const _lead = leads.find(l => l.id === decision.leadId);
+      if(_lead) applyPlaceGuard(draftAi, _lead, transactions);
       updates[taskId] = draftAi;
     });
     if(Object.keys(updates).length) {
@@ -4825,6 +5034,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       }
       if(decision.decision === 'action') {
         // AI suggests a specific action — build a task from it
+        // AG-088/091: place-name guard + referral check on the AI's draft (also covers cached decisions)
+        decision = applyPlaceGuard({...decision}, lead, transactions, ['draftText','subject','task','reason']);
         const prio = decision.priority || 'today';
         const ch = decision.channel || 'sms';
         const iconByCh = {sms:'💬', email:'✉️', call:'📞', note:'📝'};
@@ -4845,6 +5056,8 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
           aiDraft: decision.draftText || '',
           aiSubject: decision.subject || '',
           aiWhy: decision.why || decision.reason || '',
+          placeWarnings: decision._placeWarnings || [],
+          inboundWarning: !!decision._inboundWarning,
         });
         handledLeadIds.add(lead.id);
         return;
@@ -4853,6 +5066,29 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
       const t = protocolByLead[lead.id];
       if(t) finalTasks.push(t);
       handledLeadIds.add(lead.id);
+    });
+
+    // AG-089: a lead whose Next Step / follow-up falls TODAY always shows on Today,
+    // whatever the AI scan picked (skip, no decision, still running).
+    leads.forEach(lead => {
+      if(done.includes(lead.id)) return;
+      const existing = finalTasks.find(t => t.leadId === lead.id);
+      const why = leadDueTodayReason(lead, d);
+      if(!why) return;
+      if(existing) { existing.dueToday = why; return; }
+      finalTasks.push({
+        id: lead.id + '-due-today',
+        leadId: lead.id,
+        leadName: lead.name,
+        leadType: lead.type,
+        priority: 'today',
+        stage: lead.stage,
+        icon: '📌',
+        label: 'Due today — ' + ((lead.nextStep||'').trim() || why),
+        action: why + '. Kept on Today even though the AI scan didn\'t pick it — use ✨ AI Write for a message.',
+        dueToday: why,
+        draftText: '',
+      });
     });
 
     // Add lease expiry tasks for active leases within 30 days
@@ -5516,6 +5752,16 @@ function TodayView({leads,transactions,communications,onSel,onTx,onUpd,onAskAI})
 
       // AG-053: AI Write error
       !isGen&&aiError[t.id]&&React.createElement('div',{role:'alert',style:{margin:'10px 0 4px',padding:'10px 12px',background:'#fef2f2',borderRadius:8,border:'1px solid #fca5a5',fontSize:12,color:'#b91c1c'}},'⚠️ '+aiError[t.id]),
+      // AG-088/091: post-check warnings (place name not in this lead's data / inbound wording on a referral)
+      (()=>{
+        if(isGen||!isOpen) return null;
+        const pw=Array.from(new Set([...((ai&&ai._placeWarnings)||[]),...(t.placeWarnings||[])]));
+        const inbound=!!((ai&&ai._inboundWarning)||t.inboundWarning);
+        if(!pw.length&&!inbound) return null;
+        return React.createElement('div',{role:'status','data-testid':'ai-postcheck-warning',style:{margin:'10px 0 4px',padding:'8px 12px',background:'#fffbeb',borderRadius:8,border:'1px solid #fcd34d',fontSize:12,color:'#92400e'}},
+          pw.length?React.createElement('div',null,'⚠️ Check place name: '+pw.map(n=>'"'+n+'"').join(', ')+" isn't in this lead's notes. Edit before sending."):null,
+          inbound?React.createElement('div',null,'⚠️ Referral lead: the draft reads as if they contacted you. Edit before sending.'):null);
+      })(),
 
       // EXPANDED PANEL
       isOpen&&!isGen&&React.createElement('div',{style:{marginTop:10}},
